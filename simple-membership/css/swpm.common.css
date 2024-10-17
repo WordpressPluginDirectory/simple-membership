@@ -107,6 +107,21 @@
     cursor: pointer;
 }
 
+/* Tooltip or note styles that we can toggle on/off */
+.swpm-tooltip-notes-container{
+    position: relative;
+    display: inline-block;
+}
+.swpm-tooltip-notes-style-1 {
+    display: none;
+    margin-top: 5px;
+    padding: 4px 7px;
+    border-radius: 3px;
+    background-color: #2d2d2d;
+    color: #FFFFFF;
+    z-index: 9999;
+}
+
 /* Block related */
 .swpm-payment-block-ic-wrapper{
     padding: 16px;
@@ -138,7 +153,20 @@
 .swpm-logged-label{
     font-weight: bold;
 }
-
+.swpm-logged-subs-status-value{
+    font-weight: bold;
+    color:#CC0000;
+}
+.swpm-logged-subs-status-description{
+    opacity: 0.8;
+}
+.swpm-edit-profile-link{
+    font-weight: bold;
+}
+.swpm-logged-logout-link{
+    font-weight: bold;
+}
+    
 /* Password reset form CSS */
 .swpm-pw-reset-submit-button{
     margin: 10px 0px;
@@ -265,4 +293,56 @@
 	min-width: 80px;
 	border-radius: 4px;
 	background-color: #b6dee4;
+}
+
+.swpm_status_subscription_cancelled{
+    padding: 7px 15px;
+    width: auto;
+    display: inline-block;
+    text-align: center;
+    min-width: 80px;
+    border-radius: 4px;
+    background-color: #e4d4b6;
+}
+
+.swpm-active-subs-table{
+    width: 100%;
+}
+
+.swpm-active-subs-table td, .swpm-active-subs-table th{
+    text-align: left;
+    padding: 6px 10px;
+}
+
+.swpm-sub-attached-to-profile{
+    font-style: italic;
+    opacity: 0.7;
+}
+
+.swpm-cancel-subscription-button{
+	padding: 8px 15px;
+	text-align: center;
+	border-radius: 4px;
+    border: none; 
+    outline: none; 
+    margin: auto;
+}
+
+.swpm-cancel-subscription-button-active{
+	background-color: #ff6a6a;
+    cursor: pointer;
+    color: white;
+}
+
+.swpm-cancel-subscription-button-active:hover{
+    background-color: #d95e5e;
+    transition: 200ms;
+}
+
+.swpm-active-subs-api-key-error-msg{
+    color: #cc0000;
+}
+
+.swpm-cancel-subscription-form{
+    margin-bottom: 0;
 }

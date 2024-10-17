@@ -31,7 +31,7 @@ include_once('class.swpm-permission-collection.php');
 include_once('class.swpm-auth-permission-collection.php');
 include_once('class.swpm-transactions.php');
 include_once('shortcode-related/class.swpm-shortcodes-handler.php');
-include_once('class-swpm-member-subscriptions.php');
+include_once('class.swpm-utils-subscription.php');
 include_once( SIMPLE_WP_MEMBERSHIP_PATH . 'ipn/swpm_handle_subsc_ipn.php' );
 include_once( SIMPLE_WP_MEMBERSHIP_PATH . 'lib/paypal/class-swpm-paypal-main.php' );
 include_once( SIMPLE_WP_MEMBERSHIP_PATH . 'classes/class.swpm-block.php' );
@@ -63,8 +63,8 @@ class SimpleWpMembership {
         //TODO - refactor these shortcodes into the shortcodes handler class
         add_shortcode("swpm_registration_form", array(&$this, 'registration_form'));
         add_shortcode('swpm_profile_form', array(&$this, 'profile_form'));
-        add_shortcode('swpm_login_form', array(&$this, 'login'));
-        add_shortcode('swpm_reset_form', array(&$this, 'reset'));
+        add_shortcode('swpm_login_form', array(&$this, 'login_form_shortcode_output'));
+        add_shortcode('swpm_reset_form', array(&$this, 'reset_password_shortcode_output'));
 
         add_action('wp_head', array(&$this, 'wp_head_callback'));
         add_action('save_post', array(&$this, 'save_postdata'));
@@ -79,7 +79,7 @@ class SimpleWpMembership {
         add_action('wp_logout', array(&$this, 'wp_logout_handler'));
         add_action('password_reset', array(&$this, 'wp_password_reset_hook'), 10, 2);
         add_action('user_register', array(&$this, 'swpm_handle_wp_user_registration'));
-        add_action('profile_update', array(&$this, 'sync_with_wp_profile'), 10, 2);        
+        add_action('profile_update', array(&$this, 'sync_with_wp_profile'), 10, 3);        
 
         //SWPM login/logout hooks.
         //Note: These should only handle/execute when the login or logout originates from our plugin's login/logout form to prevent loop.
@@ -94,7 +94,7 @@ class SimpleWpMembership {
 
         //init is too early for settings api.
         add_action('admin_init', array(&$this, 'admin_init_hook'));
-        add_action('plugins_loaded', array(&$this, "plugins_loaded"));        
+        add_action('plugins_loaded', array(&$this, "plugins_loaded"));
     }
 
     public function wp_head_callback() {
@@ -289,10 +289,6 @@ class SimpleWpMembership {
         return $hide ? FALSE : TRUE;
     }
 
-    public function shutdown() {
-        SwpmLog::writeall();
-    }
-
     public static function handle_after_login_authentication($username, $pass, $rememberme = true) {
         //This function is called after authentication is successful in SWPM.
         //This function should only handle/execute when the loign originates from our plugin's login form.
@@ -357,9 +353,23 @@ class SimpleWpMembership {
             //Check if "redirect_to" parameter is set. If so, use that URL.
             if(isset($_REQUEST['redirect_to'])){
                 $redirect_url = sanitize_url($_REQUEST['redirect_to']);
-                SwpmLog::log_auth_debug("The redirect_to query parameter is set. Value: ". $redirect_url, true);
+                //Validate the redirect URL
+                $fallback_url = SIMPLE_WP_MEMBERSHIP_SITE_HOME_URL;
+                //The 'allowed_redirect_hosts' filter hook can be used to add or remove allowed hosts.
+                $redirect_url = wp_validate_redirect( $redirect_url, $fallback_url );
+                SwpmLog::log_auth_debug("The redirect_to query parameter is set. URL value after the wp validation: ". $redirect_url, true);
             } else {
+                //The 'redirect_to' parameter is not set. By default we will use the current page URL as the redirect URL.
                 $redirect_url = SwpmMiscUtils::get_current_page_url();
+
+                //Check if this is after an auto-login authentication (if yes, we need to override the URL).
+                if( isset( $_REQUEST['swpm_auto_login']) && $_REQUEST['swpm_auto_login'] == '1' ){
+                    //On some servers the current page URL may contain the 'swpm_auto_login' parameter (when the auto-login feature is used) . 
+                    //In that case, we don't want to create a loop of auto-login redirect.
+                    //We will use the site's login-page URL as the redirect URL for that condition.
+                    SwpmLog::log_auth_debug("This is after an auto-login authentication. Setting the login page URL as the redirect URL.", true);
+                    $redirect_url = SwpmSettings::get_instance()->get_value('login-page-url');
+                }                
             }
 
             //Check if the URL is still empty. If so, use the site home URL.
@@ -428,7 +438,7 @@ class SimpleWpMembership {
         }
     }
 
-    public function login() {
+    public function login_form_shortcode_output() {
         ob_start();
         $auth = SwpmAuth::get_instance();
         if ($auth->is_logged_in()) {
@@ -453,21 +463,67 @@ class SimpleWpMembership {
         }
     }
 
-    public function sync_with_wp_profile($wp_user_id) {
+    public function sync_with_wp_profile($wp_user_id, $old_user_data, $userdata) {
+        //Reference - https://developer.wordpress.org/reference/hooks/profile_update/
+
+        //Check if the SWPM profile update form was submitted.
+		$swpm_editprofile_submit = filter_input( INPUT_POST, 'swpm_editprofile_submit' );
+		if ( ! empty( $swpm_editprofile_submit ) ) {
+            //This is a SWPM profile update form submission. Nothing to do here.
+            //SwpmLog::log_simple_debug( 'WP profile_update hook handler - SWPM profile update form submission detected. Nothing to do here.', true );
+            return;
+        }
+
+        //Trigger a filter hook to allow any addon(s) to override the wp profile_update hook handling.
+        $overriden_msg = apply_filters('swpm_wp_profile_update_hook_override', '');
+        if( !empty( $overriden_msg ) ){
+            //The WP profile_update hook handling has been overridden by an addon.
+            SwpmLog::log_simple_debug( 'WP profile_update hook handling has been overridden by an addon. Nothing to do here.', true );
+            return;
+        }
+
+        //Retrieve the SWPM user profile for the given WP user ID.
         global $wpdb;
         $wp_user_data = get_userdata($wp_user_id);
         $query = $wpdb->prepare("SELECT * FROM " . $wpdb->prefix . "swpm_members_tbl WHERE " . ' user_name=%s', $wp_user_data->user_login);
         $profile = $wpdb->get_row($query, ARRAY_A);
         $profile = (array) $profile;
-        if (empty($profile)) {
+        if ( empty($profile) ) {
+            //No SWPM user found for this WP user. Nothing to do.
             return;
         }
+
+        //Useful for debugging purpose
+        //SwpmLog::log_simple_debug('WP User ID: ' . $wp_user_id, true);
+        //SwpmLog::log_array_data_to_debug($wp_user_data, true);
+        //SwpmLog::log_array_data_to_debug($userdata, true);
+
+        //Update the SWPM user profile with the latest WP user data that we received via the 'profile_update' action hook.  
         $profile['user_name'] = $wp_user_data->user_login;
         $profile['email'] = $wp_user_data->user_email;
-        $profile['password'] = $wp_user_data->user_pass;
         $profile['first_name'] = $wp_user_data->user_firstname;
         $profile['last_name'] = $wp_user_data->user_lastname;
+        $profile['password'] = $wp_user_data->user_pass;
         $wpdb->update($wpdb->prefix . "swpm_members_tbl", $profile, array('member_id' => $profile['member_id']));
+
+        //===============/
+        //TODO - Only reset SWPM auth cookies only since this is an update from WP end. WP will handle their cookie reset. 
+        //NOTE: This hook will be triggered for both 
+        //1) When admin is updating WP user profile from the WP user's menu. 
+        //2) When user is updating their own profile from the WP user's profile update interface.
+        //Otherwise any profile update from WP Admin by the site admin can cause logout. 
+        //===============/
+        //Since the encrypted/hashed password is getting updated with the one from WP User entry, the SWPM auth cookies need to be reset to keep the SWPM user logged in.     
+        // $auth_object = SwpmAuth::get_instance();
+        // $swpm_user_name = $profile['user_name'];
+        // $user_info_params = array(
+        //     'member_id' => $profile['member_id'],
+        //     'user_name' => $swpm_user_name,
+        //     'new_enc_password' => $profile['password'],
+        // );
+        // $auth_object->reset_swpm_auth_cookies_only($user_info_params);
+
+        SwpmLog::log_simple_debug( 'Completed the profile_update hook handling - SWPM user profile (Member ID: '.$profile['member_id'].') updated with the latest WP user data.', true );
     }
 
     function swpm_handle_wp_user_registration($user_id) {
@@ -506,7 +562,7 @@ class SimpleWpMembership {
         SwpmMemberUtils::create_swpm_member_entry_from_array_data($fields);
     }
 
-    public function reset() {        
+    public function reset_password_shortcode_output() {        
         //Check if the form has been submitted and there is a success message.
         $any_notice_output = $this->capture_any_notice_output();
         if( !empty( $any_notice_output ) && $this->success_notice_pw_reset ){
@@ -760,6 +816,7 @@ class SimpleWpMembership {
             $level_ids = $wpdb->get_col($query);
             foreach ($level_ids as $level) {
                 if (isset($swpm_protection_level[$level])) {
+                    //Apply the post ID to the protection list and then save it in the database.
                     SwpmPermission::get_instance($level)->apply(array($post_id), $post_type)->save();
                 } else {
                     SwpmPermission::get_instance($level)->remove(array($post_id), $post_type)->save();
@@ -1010,9 +1067,21 @@ class SimpleWpMembership {
             return $any_notice_output;
         }
         
-        $is_free = SwpmSettings::get_instance()->get_value('enable-free-membership');
-        $free_level = absint(SwpmSettings::get_instance()->get_value('free-membership-id'));
-        $level = isset($atts['level']) ? absint($atts['level']) : ($is_free ? $free_level : null);
+        //Check if free membership is enabled on the site.
+        $is_free_enabled = SwpmSettings::get_instance()->get_value('enable-free-membership');
+        $free_level_id = absint(SwpmSettings::get_instance()->get_value('free-membership-id'));
+        $is_valid_free_level = SwpmMembershipLevelUtils::check_if_membership_level_exists($free_level_id);
+        if( $is_free_enabled && !$is_valid_free_level ){
+            //Free membership is enabled but the free level ID is invalid. 
+            //This is a critical configuration error. Show an error message and return.
+            $output .= '<div class="swpm_error swpm-red-error-text">';
+            $output .= __('Error! You have enabled free membership on this site but you did not enter a valid membership level ID in the "Free Membership Level ID" field of the settings menu.', 'simple-membership');
+            $output .= '</div>';
+            return $output;
+        }
+
+        //Get the level ID from the shortcode or use the free membership level ID if free membership is enabled.
+        $level = isset($atts['level']) ? absint($atts['level']) : ($is_free_enabled ? $free_level_id : null);
         
         $output .= $any_notice_output;
         $output .= SwpmFrontRegistration::get_instance()->regigstration_ui($level);
@@ -1082,8 +1151,12 @@ class SimpleWpMembership {
     }
 
     public static function activate() {
+        //Schedule the cron event for account status and expiry checks. This cron event is also used by the ENB extension.
         wp_schedule_event(time(), 'daily', 'swpm_account_status_event');
+        //Schedule the pending account deletion cron event.
         wp_schedule_event(time(), 'daily', 'swpm_delete_pending_account_event');
+
+        //Run the standard installer steps
         include_once('class.swpm-installation.php');
         SwpmInstallation::run_safe_installer();
     }

@@ -7,16 +7,16 @@ add_filter('swpm_payment_button_shortcode_for_pp_buy_now_new', 'swpm_render_pp_b
 
 function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
 
-    $button_id = isset($args['id']) ? $args['id'] : '';
+    $button_id = isset($args['id']) ? sanitize_text_field($args['id']) : '';
     if (empty($button_id)) {
-        return '<p class="swpm-red-box">Error! swpm_render_pp_buy_now_new_button_sc_output() function requires the button ID value to be passed to it.</p>';
+        return '<p class="swpm-red-box">'.__('Error! swpm_render_pp_buy_now_new_button_sc_output() function requires the button ID value to be passed to it.', 'simple-membership').'</p>';
     }
 
     //Membership level for this button
     $membership_level_id = get_post_meta($button_id, 'membership_level_id', true);
     //Verify that this membership level exists (to prevent user paying for a level that has been deleted)
     if (!SwpmUtils::membership_level_id_exists($membership_level_id)) {
-        return '<p class="swpm-red-box">Error! The membership level specified in this button does not exist. You may have deleted this membership level. Edit the button and use the correct membership level.</p>';
+        return '<p class="swpm-red-box">'.__('Error! The membership level specified in this button does not exist. You may have deleted this membership level. Edit the button and use the correct membership level.', 'simple-membership').'</p>';
     }
 
     //Payment amount
@@ -106,10 +106,12 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
     //Create nonce for this button. 
     $wp_nonce = wp_create_nonce($on_page_embed_button_id);
 
+    $swpm_button_wrapper_id = 'swpm-button-wrapper-'.$button_id;
+
     $output = '';
     ob_start();
     ?>
-    <div class="swpm-button-wrapper swpm-paypal-buy-now-button-wrapper">
+    <div id="<?php echo esc_attr($swpm_button_wrapper_id); ?>" class="swpm-button-wrapper swpm-paypal-buy-now-button-wrapper">
 
     <!-- PayPal button container where the button will be rendered -->
     <div id="<?php echo esc_attr($on_page_embed_button_id); ?>" style="width: <?php echo esc_attr($btn_width); ?>px;"></div>
@@ -117,8 +119,7 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
     <input type="hidden" id="<?php echo esc_attr($on_page_embed_button_id.'-custom-field'); ?>" name="custom" value="<?php echo esc_attr($custom_field_value); ?>">
 
     <script type="text/javascript">
-    jQuery( function( $ ) {
-        $( document ).on( "swpm_paypal_sdk_loaded", function() { 
+        document.addEventListener( "swpm_paypal_sdk_loaded", function() { 
             //Anything that goes here will only be executed after the PayPal SDK is loaded.
             console.log('PayPal JS SDK is loaded.');
 
@@ -139,7 +140,7 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
                 },
 
                 // Setup the transaction.
-                async createOrder() {
+                createOrder: async function() {
                     // Create the order in PayPal using the PayPal API.
                     // https://developer.paypal.com/docs/checkout/standard/integrate/
                     // The server-side Create Order API is used to generate the Order. Then the Order-ID is returned.                    
@@ -169,23 +170,25 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
                             return response_data.order_id;
                         } else {
                             const error_message = JSON.stringify(response_data);
+                            console.error('Error occurred during the create-order API call to PayPal. ' + error_message);
                             throw new Error(error_message);
                         }
                     } catch (error) {
                         console.error(error);
-                        alert('Could not initiate PayPal Checkout...\n\n' + error);
+                        alert('Could not initiate PayPal Checkout...\n\n' + JSON.stringify(error));
                     }
                 },
     
                 // handle the onApprove event
-                async onApprove(data, actions) {
+                onApprove: async function(data, actions) {
                     console.log('Successfully created a transaction.');
 
                     //Show the spinner while we process this transaction.
-                    var pp_button_container = jQuery('#<?php echo esc_js($on_page_embed_button_id); ?>');
-                    var pp_button_spinner_conainer = pp_button_container.siblings('.swpm-pp-button-spinner-container');
-                    pp_button_container.hide();//Hide the buttons
-                    pp_button_spinner_conainer.css('display', 'inline-block');//Show the spinner.
+                    const pp_button_container = document.getElementById('<?php echo esc_js($on_page_embed_button_id); ?>');
+                    const pp_button_container_wrapper = document.getElementById('<?php echo esc_js($swpm_button_wrapper_id); ?>');
+                    const pp_button_spinner_container = pp_button_container_wrapper.querySelector('.swpm-pp-button-spinner-container');
+                    pp_button_container.style.display = 'none'; //Hide the buttons
+                    pp_button_spinner_container.style.display = 'inline-block'; //Show the spinner.
 
                     // Capture the order in PayPal using the PayPal API.
                     // https://developer.paypal.com/docs/checkout/standard/integrate/
@@ -196,10 +199,17 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
                     pp_bn_data.button_id = '<?php echo esc_js($button_id); ?>';
                     pp_bn_data.on_page_button_id = '<?php echo esc_js($on_page_embed_button_id); ?>';
                     pp_bn_data.item_name = '<?php echo esc_js($item_name); ?>';
+
                     //Add custom_field data. It is important to encode the custom_field data so it doesn't mess up the data with & character.
                     const custom_data = document.getElementById('<?php echo esc_attr($on_page_embed_button_id."-custom-field"); ?>').value;
                     pp_bn_data.custom_field = encodeURIComponent(custom_data);
-                    let post_data = 'action=swpm_pp_capture_order&data=' + JSON.stringify(pp_bn_data) + '&_wpnonce=<?php echo $wp_nonce; ?>';
+                    
+                    const post_data = new URLSearchParams({
+                        action: 'swpm_pp_capture_order',
+                        data: JSON.stringify(pp_bn_data),
+                        _wpnonce: '<?php echo $wp_nonce; ?>',
+                    }).toString();
+                    
                     try {
                         const response = await fetch("<?php echo admin_url( 'admin-ajax.php' ); ?>", {
                             method: "post",
@@ -252,12 +262,12 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
                         }
 
                         //Return the button and the spinner back to their orignal display state.
-                        pp_button_container.show();//Show the buttons
-                        pp_button_spinner_conainer.hide();//Hide the spinner.
+                        pp_button_container.style.display = 'block'; // Show the buttons
+                        pp_button_spinner_container.style.display = 'none'; // Hide the spinner
 
                     } catch (error) {
                         console.error(error);
-                        alert('Sorry, your transaction could not be processed...\n\n' + error);
+                        alert('PayPal returned an error! Transaction could not be processed. Enable the debug logging feature to get more details...\n\n' + JSON.stringify(error));
                     }
                 },
     
@@ -280,7 +290,6 @@ function swpm_render_pp_buy_now_new_button_sc_output($button_code, $args) {
                     console.error('PayPal Buttons failed to render');
                 });
 
-            });
         });
     </script>
     <style>

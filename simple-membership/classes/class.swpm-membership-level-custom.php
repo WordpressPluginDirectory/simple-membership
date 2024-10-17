@@ -1,10 +1,9 @@
 <?php
 /**
- * Description of BMembershipLevelCustom
- *
- * @author nur
+ * Used to store custom data for membership levels.
  */
-class SwpmMembershipLevelCustom {
+
+ class SwpmMembershipLevelCustom {
     private static $instances = array();
     private $level_id;
     private $fields;
@@ -46,7 +45,7 @@ class SwpmMembershipLevelCustom {
             $this->fields[$meta_key] = $new;
         }
         $this->save($this->fields[$meta_key]);
-    return $this;
+        return $this;
     }
     public function get($meta_key, $default=''){
         $meta_key = preg_replace('|[^A-Z0-9_]|i', '', $meta_key);
@@ -67,7 +66,7 @@ class SwpmMembershipLevelCustom {
     }
     private function save($field){
         global $wpdb;
-        if (!isset($field['meta_key'])){retern;} // cannot continue without key field.
+        if (!isset($field['meta_key'])){return;} // cannot continue without key field.
         $meta_key = preg_replace('|[^A-Z0-9_]|i', '', $field['meta_key']);
         $query = $wpdb->prepare(
                 'REPLACE INTO ' . $wpdb->prefix. 'swpm_membership_meta_tbl

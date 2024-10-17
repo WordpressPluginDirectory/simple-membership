@@ -1,14 +1,12 @@
 <?php
 
 /**
- * Description of BRegistration
- *
- * @author nur
+ * Description of SwpmRegistration
  */
 abstract class SwpmRegistration {
 
-	protected $member_info     = array();
-	var $email_activation      = false;
+	protected $member_info = array();
+	var $email_activation = false;
 	protected static $_intance = null;
 
 	//public abstract static function get_instance();
@@ -50,6 +48,9 @@ abstract class SwpmRegistration {
 			$activation_link = apply_filters('swpm_send_reg_email_activation_link', $activation_link);
 
 			$member_info['activation_link'] = $activation_link;
+
+			//Debug purposes.
+			//SwpmLog::log_simple_debug( 'send_reg_email() - email activation link: ' . $activation_link, true );
 		}
 
 		$from_address                         = $settings->get_value( 'email-from' );

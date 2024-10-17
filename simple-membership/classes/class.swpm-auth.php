@@ -1,12 +1,16 @@
 <?php
 
+/**
+ * This is a singleton class. It is responsible for handling various authentication related tasks of the plugin.
+ * It checks if the user is logged in or not. It checks if the login cookie is valid or not.
+ * It also handles the login form submission.
+ */
 class SwpmAuth {
-
-	public $protected;
-	public $permitted;
+	private static $_this; //Singleton instance of this class.
+	public $protected; //Protected content object.
+	public $permitted; //Permission object for the logged in user.
 	private $isLoggedIn;
 	private $lastStatusMsg;
-	private static $_this;
 	public $userData;
 
 	private function __construct() {
@@ -19,36 +23,72 @@ class SwpmAuth {
 			setcookie( 'swpm-login-form-custom-msg', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN );
 		}
 		$this->isLoggedIn = false;
-		$this->userData   = null;
-		$this->protected  = SwpmProtection::get_instance();
+		$this->userData = null;
+		$this->protected = SwpmProtection::get_instance();
 	}
 
-	private function init() {
-		$valid = $this->validate();
-		//SwpmLog::log_auth_debug("init:". ($valid? "valid": "invalid"), true);
-		if ( ! $valid ) {
-			$this->authenticate();
-		}
-	}
-
+	/**
+	 * Get the singleton instance of this class.
+	 */
 	public static function get_instance() {
 		if ( empty( self::$_this ) ) {
 			self::$_this = new SwpmAuth();
-			self::$_this->init();
+			self::$_this->auth_init();
 		}
 		return self::$_this;
 	}
 
+	/**
+	 * This function is called when the object is initialized.
+	 * The singleton pattern is used to make sure that there is only one instance of this object per page load.
+	 * So this function is only called once per page load.
+	 */
+	private function auth_init() {
+		//SwpmLog::log_auth_debug("SwpmAuth::auth_init() function.", true);
+		/**********************************************************
+		 * Note: This function is run on every page load. 
+		 * It guarantees the authenticity of the user's login session and permission on every page load.
+		 * It is used to perform certain login related validation tasks when the object is initialized.
+		 * It calls the validate() function to check if login cookie exists, if the cookie is valid, if the cookie is expired etc.
+		 * The validate() function will call the check_constraints() function to check if the user can login.
+		 * The check_constraints() function will update the last accessed date and IP address for this member's login session.
+		 * The check_constraints() function will also load the membership level's permission object for this member.
+		 **********************************************************/
+		$login_session_valid = $this->validate();
+		if ( ! $login_session_valid ) {
+			// The user is not logged in, or the login session is invalid due to some other validation.
+			// In this case, we can check if the login form was submitted and process the login request.
+			// Note: We will check if spwm_user_name or swpm_password is set inside the authenticate() function to know if the login form was submitted (keeping things backwards compatible).
+			$authenticate_response = $this->authenticate();
+
+			if ( isset( $_POST['swpm-login']) && $authenticate_response === false ) {
+				//SwpmLog::log_auth_debug( 'SwpmAuth::auth_init() - SWPM Login form was submitted and the authenticate function returned false. Triggering the swpm_login_failed action hook.', true );
+				$this->trigger_swpm_login_failed_hook();
+			}
+		}
+	}
+
+	/**
+	 * This function is used to process the login authentication request.
+	 * It is called on every page load via the auth_init()->authenticate() function.
+	 * It checks if the login form was submitted and processes the login request.
+	 * It loads the userData variable with the user's data from the database.
+	 * It calls the check_password() function to check if the password is correct.
+	 * It calls the check_constraints() function to check if the user can login.
+	 */
 	private function authenticate( $user = null, $pass = null ) {
+		// If $user and $pass are not provided, the function was called from auth_init().
+		// In this case, we will attempt to retrieve the data from the login form's POST data.
 		global $wpdb;
 		$swpm_user_name = empty( $user ) ? apply_filters( 'swpm_user_name', filter_input( INPUT_POST, 'swpm_user_name' ) ) : $user;
-		$swpm_password  = empty( $pass ) ? filter_input( INPUT_POST, 'swpm_password' ) : $pass;
+		$swpm_password = empty( $pass ) ? filter_input( INPUT_POST, 'swpm_password' ) : $pass;
 
 		if ( isset($_POST['swpm_user_name']) && empty ( $swpm_user_name )){
 			//Login form was submitted but the username field was left empty.
 			$this->isLoggedIn    = false;
 			$this->userData      = null;
 			$this->lastStatusMsg = '<span class="swpm-login-error-msg swpm-red-error-text">' . SwpmUtils::_( 'Username field cannot be empty.' ) . '</span>';
+			$this->trigger_swpm_authenticate_failed_hook($swpm_user_name);//Trigger authenticate failed action hook.
 			return false;
 		}
 		if ( isset($_POST['swpm_password']) && empty ( $swpm_password )){
@@ -56,6 +96,7 @@ class SwpmAuth {
 			$this->isLoggedIn    = false;
 			$this->userData      = null;
 			$this->lastStatusMsg = '<span class="swpm-login-error-msg swpm-red-error-text">' . SwpmUtils::_( 'Password field cannot be empty.' ) . '</span>';
+			$this->trigger_swpm_authenticate_failed_hook($swpm_user_name);//Trigger authenticate failed action hook.
 			return false;
 		}
 		
@@ -72,12 +113,12 @@ class SwpmAuth {
 			if ( current_user_can( 'administrator' ) ) {
 				//This user is logged in as ADMIN then trying to do another login as a member. Stop the login request processing (we don't want to override your admin login session).
 				$wp_profile_page = SIMPLE_WP_MEMBERSHIP_SITE_HOME_URL . '/wp-admin/profile.php';
-				$error_msg       = '';
-				$error_msg      .= '<p>' . SwpmUtils::_( 'Warning! Simple Membership plugin cannot process this login request to prevent you from getting logged out of WP Admin accidentally.' ) . '</p>';
-				$error_msg      .= '<p><a href="' . $wp_profile_page . '" target="_blank">' . SwpmUtils::_( 'Click here' ) . '</a>' . SwpmUtils::_( ' to see the profile you are currently logged into in this browser.' ) . '</p>';
-				$error_msg      .= '<p>' . SwpmUtils::_( 'You are logged into the site as an ADMIN user in this browser. First, logout from WP Admin then you will be able to log in as a normal member.' ) . '</p>';
-				$error_msg      .= '<p>' . SwpmUtils::_( 'Alternatively, you can use a different browser (where you are not logged-in as ADMIN) to test the membership login.' ) . '</p>';
-				$error_msg      .= '<p>' . SwpmUtils::_( 'Your normal visitors or members will never see this message. This message is ONLY for ADMIN user.' ) . '</p>';
+				$error_msg = '';
+				$error_msg .= '<p>' . SwpmUtils::_( 'Warning! Simple Membership plugin cannot process this login request to prevent you from getting logged out of WP Admin accidentally.' ) . '</p>';
+				$error_msg .= '<p><a href="' . $wp_profile_page . '" target="_blank">' . SwpmUtils::_( 'Click here' ) . '</a>' . SwpmUtils::_( ' to see the profile you are currently logged into in this browser.' ) . '</p>';
+				$error_msg .= '<p>' . SwpmUtils::_( 'You are logged into the site as an ADMIN user in this browser. First, logout from WP Admin then you will be able to log in as a normal member.' ) . '</p>';
+				$error_msg .= '<p>' . SwpmUtils::_( 'Alternatively, you can use a different browser (where you are not logged-in as ADMIN) to test the membership login.' ) . '</p>';
+				$error_msg .= '<p>' . SwpmUtils::_( 'Your normal visitors or members will never see this message. This message is ONLY for ADMIN user.' ) . '</p>';
 				wp_die( $error_msg );
 			}
 
@@ -89,8 +130,8 @@ class SwpmAuth {
 			}
 
 			if ( is_email( $swpm_user_name ) ) {//User is trying to log-in using an email address
-				$email    = sanitize_email( $swpm_user_name );
-				$query    = $wpdb->prepare( 'SELECT user_name FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE email = %s', $email );
+				$email = sanitize_email( $swpm_user_name );
+				$query = $wpdb->prepare( 'SELECT user_name FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE email = %s', $email );
 				$username = $wpdb->get_var( $query );
 				if ( $username ) {//Found a user record
 					$swpm_user_name = $username; //Grab the usrename value so it can be used in the authentication process.
@@ -103,13 +144,14 @@ class SwpmAuth {
 			$pass = trim( $swpm_password );
 			SwpmLog::log_auth_debug( 'Authentication request - Username: ' . $swpm_user_name, true );
 
-			$query          = 'SELECT * FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE user_name = %s';
-			$userData       = $wpdb->get_row( $wpdb->prepare( $query, $user ) );
+			$query = 'SELECT * FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE user_name = %s';
+			$userData = $wpdb->get_row( $wpdb->prepare( $query, $user ) );
 			$this->userData = $userData;
 			if ( ! $userData ) {
 				$this->isLoggedIn    = false;
 				$this->userData      = null;
 				$this->lastStatusMsg = '<span class="swpm-login-error-msg swpm-red-error-text">' . SwpmUtils::_( 'No user found with that username or email.' ) . '</span>';
+				$this->trigger_swpm_authenticate_failed_hook($swpm_user_name);//Trigger authenticate failed action hook.
 				return false;
 			}
 			$check = $this->check_password( $pass, $userData->password );
@@ -117,6 +159,7 @@ class SwpmAuth {
 				$this->isLoggedIn    = false;
 				$this->userData      = null;
 				$this->lastStatusMsg = '<span class="swpm-login-error-msg swpm-red-error-text">' . SwpmUtils::_( 'Password empty or invalid.' ) . '</span>';
+				$this->trigger_swpm_authenticate_failed_hook($swpm_user_name);//Trigger authenticate failed action hook.
 				return false;
 			}
 			if ( $this->check_constraints() ) {
@@ -132,20 +175,94 @@ class SwpmAuth {
 		return false;
 	}
 
-	private function check_constraints() {
-		if ( empty( $this->userData ) ) {
+	/**
+	 * This function is used to validate the login cookie.
+	 * It is called on every page load via the auth_init()->validate() function.
+	 * Checks if the login cookie exists and if it is valid.
+	 * It calls the check_constraints() function to check if the user can login which also updates the user's login date and IP. Also loads the permission object.
+	 * @return bool
+	 */
+	private function validate() {
+		$auth_cookie_name = is_ssl() ? SIMPLE_WP_MEMBERSHIP_SEC_AUTH : SIMPLE_WP_MEMBERSHIP_AUTH;
+		if ( ! isset( $_COOKIE[ $auth_cookie_name ] ) || empty( $_COOKIE[ $auth_cookie_name ] ) ) {
 			return false;
 		}
+		$cookie_elements = explode( '|', $_COOKIE[ $auth_cookie_name ] );
+		if ( count( $cookie_elements ) != 3 ) {
+			return false;
+		}
+
+		//SwpmLog::log_auth_debug("validate() - " . $_COOKIE[$auth_cookie_name], true);
+		list($username, $expiration, $hmac) = $cookie_elements;
+		$expired = $expiration;
+		// Allow a grace period for POST and AJAX requests
+		if ( defined( 'DOING_AJAX' ) || 'POST' == $_SERVER['REQUEST_METHOD'] ) {
+			$expired += HOUR_IN_SECONDS;
+		}
+		// Quick check to see if an honest cookie has expired
+		if ( $expired < time() ) {
+			$this->lastStatusMsg = SwpmUtils::_( 'Session Expired.' ); //do_action('auth_cookie_expired', $cookie_elements);
+			SwpmLog::log_auth_debug( 'validate() - Session Expired', true );
+			return false;
+		}
+
+		global $wpdb;
+		$query = ' SELECT * FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE user_name = %s';
+		$user = $wpdb->get_row( $wpdb->prepare( $query, $username ) );
+		if ( empty( $user ) ) {
+			$this->lastStatusMsg = SwpmUtils::_( 'Invalid Username' );
+			return false;
+		}
+
+		$pass_frag = substr( $user->password, 8, 4 );
+		$key = self::b_hash( $username . $pass_frag . '|' . $expiration );
+		$hash = hash_hmac( 'md5', $username . '|' . $expiration, $key );
+		if ( $hmac != $hash ) {
+			$this->lastStatusMsg = SwpmUtils::_( 'Please login again.' );
+			SwpmLog::log_auth_debug( 'Validate() function - Bad hash. Going to clear the auth cookies to clear the bad hash.', true );
+			SwpmLog::log_auth_debug( 'Validate() function - The user profile with the username: ' . $username . ' will be logged out.', true );
+			
+            do_action('swpm_validate_login_hash_mismatch');
+			//Clear the auth cookies of SWPM to clear the bad hash. This will log out the user.
+			$this->swpm_clear_auth_cookies();
+			//Clear the wp user auth cookies and destroy session as well.
+			$this->clear_wp_user_auth_cookies();
+			return false;
+		}
+
+		if ( $expiration < time() ) {
+			$GLOBALS['login_grace_period'] = 1;
+		}
+		$this->userData = $user;
+		return $this->check_constraints();
+	}
+
+	/**
+	 * Checks if all the constraints are met for the user to be able to login.
+	 * Called on every page load via the auth_init()->validate()->check_constraints() function.
+	 * It updates the last accessed date and IP address for this member's login session.
+	 * It checks the account status to see if the user can login.
+	 * It also checks the member's account expiry and sets expiry status accordingly (as a failsafe to expiry cronjob).
+	 * It loads the membership level's permission object for this member.
+	 * @return bool
+	 */
+	private function check_constraints() {
+		//SwpmLog::log_auth_debug("SwpmAuth::check_constraints() function.", true);
+		if ( empty( $this->userData ) ) {
+			//No user data found. Can't proceed.
+			return false;
+		}
+
 		global $wpdb;
 		$enable_expired_login = SwpmSettings::get_instance()->get_value( 'enable-expired-account-login', '' );
 
 		//Update the last accessed date and IP address for this login attempt. $wpdb->update(table, data, where, format, where format)
 		$last_accessed_date = current_time( 'mysql' );
-		$last_accessed_ip   = SwpmUtils::get_user_ip_address();
+		$last_accessed_ip = SwpmUtils::get_user_ip_address();
 		$wpdb->update(
 			$wpdb->prefix . 'swpm_members_tbl',
 			array(
-				'last_accessed'         => $last_accessed_date,
+				'last_accessed' => $last_accessed_date,
 				'last_accessed_from_ip' => $last_accessed_ip,
 			),
 			array( 'member_id' => $this->userData->member_id ),
@@ -157,18 +274,18 @@ class SwpmAuth {
 		$can_login = true;
 		if ( $this->userData->account_state == 'inactive' && empty( $enable_expired_login ) ) {
 			$this->lastStatusMsg = SwpmUtils::_( 'Account is inactive.' );
-			$can_login           = false;
+			$can_login = false;
 		} elseif ( ( $this->userData->account_state == 'expired' ) && empty( $enable_expired_login ) ) {
 			$this->lastStatusMsg = SwpmUtils::_( 'Account has expired.' );
-			$can_login           = false;
+			$can_login = false;
 		} elseif ( $this->userData->account_state == 'pending' ) {
 			$this->lastStatusMsg = SwpmUtils::_( 'Account is pending.' );
-			$can_login           = false;
+			$can_login = false;
 		} elseif ( $this->userData->account_state == 'activation_required' ) {
-			$resend_email_url    = add_query_arg(
+			$resend_email_url = add_query_arg(
 				array(
 					'swpm_resend_activation_email' => '1',
-					'swpm_member_id'               => $this->userData->member_id,
+					'swpm_member_id' => $this->userData->member_id,
 				),
 				get_home_url()
 			);
@@ -179,25 +296,31 @@ class SwpmAuth {
 
 		if ( ! $can_login ) {
 			$this->isLoggedIn = false;
-			$this->userData   = null;
+			$this->userData = null;
 			return false;
 		}
 
+		//Check if the user's account has expired. 
 		if ( SwpmUtils::is_subscription_expired( $this->userData ) ) {
+			//The user's account has expired.
 			if ( $this->userData->account_state == 'active' ) {
+				//This is an additional check at login validation time to ensure the user account gets set to expired state even if the cronjob fails to do it.
 				$wpdb->update( $wpdb->prefix . 'swpm_members_tbl', array( 'account_state' => 'expired' ), array( 'member_id' => $this->userData->member_id ), array( '%s' ), array( '%d' ) );
 			}
 			if ( empty( $enable_expired_login ) ) {
+				//Account has expired and expired login is not enabled.
 				$this->lastStatusMsg = SwpmUtils::_( 'Account has expired.' );
-				$this->isLoggedIn    = false;
-				$this->userData      = null;
+				$this->isLoggedIn = false;
+				$this->userData = null;
 				return false;
 			}
 		}
 
-		$this->permitted     = SwpmPermission::get_instance( $this->userData->membership_level );
+		//Load the membership level's permission object.
+		$this->permitted = SwpmPermission::get_instance( $this->userData->membership_level );
+
 		$this->lastStatusMsg = SwpmUtils::_( 'You are logged in as:' ) . $this->userData->user_name;
-		$this->isLoggedIn    = true;
+		$this->isLoggedIn  = true;
 		return true;
 	}
 
@@ -238,16 +361,24 @@ class SwpmAuth {
 		return true;
 	}
 
+	/**
+	 * Note: This function is NOT called for our plugin's standard login form submission.
+	 * This is called for other methods of login authentication (for example, wp_authenticate_handler, auto_login, API addon etc).
+	 * Our standard login form submission uses the auth_init() to process the login request.
+	 */
 	public function login( $user, $pass, $remember = '', $secure = '' ) {
 		SwpmLog::log_auth_debug( 'SwpmAuth::login()', true );
 		if ( $this->isLoggedIn ) {
+			//Already logged in. Nothing to do here.
 			return;
 		}
 		if ( $this->authenticate( $user, $pass ) && $this->validate() ) {
+			//Authentication successful.
 			$this->set_cookie( $remember, $secure );
 		} else {
+			//Authentication failed.
 			$this->isLoggedIn = false;
-			$this->userData   = null;
+			$this->userData = null;
 		}
 		return $this->lastStatusMsg;
 	}
@@ -309,7 +440,7 @@ class SwpmAuth {
 		}
 		if( function_exists('wp_clear_auth_cookie') ){
 			wp_clear_auth_cookie();
-		}		
+		}
 	}
 	
 	private function set_cookie( $remember = '', $secure = '' ) {
@@ -359,55 +490,75 @@ class SwpmAuth {
 		setcookie( $auth_cookie_name, $auth_cookie, $expire, COOKIEPATH, COOKIE_DOMAIN, $secure, true );
 	}
 
-	private function validate() {
-		$auth_cookie_name = is_ssl() ? SIMPLE_WP_MEMBERSHIP_SEC_AUTH : SIMPLE_WP_MEMBERSHIP_AUTH;
-		if ( ! isset( $_COOKIE[ $auth_cookie_name ] ) || empty( $_COOKIE[ $auth_cookie_name ] ) ) {
-			return false;
-		}
-		$cookie_elements = explode( '|', $_COOKIE[ $auth_cookie_name ] );
-		if ( count( $cookie_elements ) != 3 ) {
-			return false;
-		}
+	/*
+	 * Important: This function should only be used after the users have changed their password. Otherwise it can have unintended consequences.
+	 * This function is used to reset the auth cookies after the user changes their password (from our plugin's profile page).
+	 */
+	public function reset_auth_cookies_after_pass_change($user_info, $remember='', $secure=''){
+		// Clear the old auth cookies for WP user and SWPM. Then set new auth cookies.
 
-		//SwpmLog::log_auth_debug("validate() - " . $_COOKIE[$auth_cookie_name], true);
-		list($username, $expiration, $hmac) = $cookie_elements;
-		$expired                            = $expiration;
-		// Allow a grace period for POST and AJAX requests
-		if ( defined( 'DOING_AJAX' ) || 'POST' == $_SERVER['REQUEST_METHOD'] ) {
-			$expired += HOUR_IN_SECONDS;
-		}
-		// Quick check to see if an honest cookie has expired
-		if ( $expired < time() ) {
-			$this->lastStatusMsg = SwpmUtils::_( 'Session Expired.' ); //do_action('auth_cookie_expired', $cookie_elements);
-			SwpmLog::log_auth_debug( 'validate() - Session Expired', true );
-			return false;
-		}
+		//Reset the auth cookies for SWPM user only.
+		$this->reset_swpm_auth_cookies_only($user_info, $remember, $secure);
 
-		global $wpdb;
-		$query = ' SELECT * FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE user_name = %s';
-		$user  = $wpdb->get_row( $wpdb->prepare( $query, $username ) );
-		if ( empty( $user ) ) {
-			$this->lastStatusMsg = SwpmUtils::_( 'Invalid Username' );
-			return false;
-		}
+		//Clear the WP user auth cookies and destroy session. New auth cookies will be generate below.
+		$this->clear_wp_user_auth_cookies(); 
+		
+		// Set new auth cookies for WP user
+		$swpm_id = $user_info['member_id'];
+		$wp_user = SwpmMemberUtils::get_wp_user_from_swpm_user_id( $swpm_id );
+		$wp_user_id = $wp_user->ID;
+		wp_set_auth_cookie( $wp_user_id, true ); // Set new auth cookies (second parameter true means "remember me")
+		wp_set_current_user( $wp_user_id ); // Set the current user object
+		SwpmLog::log_auth_debug( 'Authentication cookies have been reset after the password update.', true );
+	}
 
-		$pass_frag = substr( $user->password, 8, 4 );
-		$key       = self::b_hash( $username . $pass_frag . '|' . $expiration );
-		$hash      = hash_hmac( 'md5', $username . '|' . $expiration, $key );
-		if ( $hmac != $hash ) {
-			$this->lastStatusMsg = SwpmUtils::_( 'Please login again.' );
-			SwpmLog::log_auth_debug( 'Validate() - Bad hash. Going to clear the auth cookies to clear the bad hash.', true );
-            do_action('swpm_validate_login_hash_mismatch');
-			//Clear the auth cookies to clear the bad hash.
-			SwpmAuth::get_instance()->swpm_clear_auth_cookies();
-			return false;
-		}
+	/*
+	 * This function is used to reset the auth cookies of SWPM user only.
+	 * This is typically used after the user's password is updated in the members DB table (for example, after WP profile update hook is triggered).
+	 */
+	public function reset_swpm_auth_cookies_only($user_info, $remember='', $secure=''){
+		// First clear the old auth cookies for the SWPM user.
+		$this->swpm_clear_auth_cookies(); //Clear the swpm auth cookies. New auth cookies will generate below.
 
-		if ( $expiration < time() ) {
-			$GLOBALS['login_grace_period'] = 1;
-		}
-		$this->userData = $user;
-		return $this->check_constraints();
+		// Next, assign new cookies, so the user doesn't have to login again.
+		// Set new auth cookies for SWPM user
+        if ( $remember ) {
+            $expiration = time() + 1209600; //14 days
+            $expire = $expiration + 43200; //12 hours grace period
+        } else {
+            $expiration = time() + 259200; //3 days.
+            $expire = $expiration; //The minimum cookie expiration should be at least a few days.
+            $force_wp_user_sync = SwpmSettings::get_instance()->get_value( 'force-wp-user-sync' );
+            if ( !empty( $force_wp_user_sync ) ) {
+                //Set the expire to 0 to match with WP's cookie expiration (when "remember me" is not checked).
+                SwpmLog::log_auth_debug( 'The force_wp_user_sync option is enabled. Setting the cookie expiration to 0 to match with WP\'s cookie expiration (when "remember me" is not checked).', true );
+                $expire = 0;
+            }
+        }
+        $expire = apply_filters( 'swpm_auth_cookie_expiry_value', $expire );
+
+        if ( SwpmUtils::is_multisite_install() ) {
+            //Defines cookie-related WordPress constants on a multi-site setup (if not defined already).
+            wp_cookie_constants();
+        }
+
+        $expiration_timestamp = SwpmUtils::get_expiration_timestamp( $this->userData );
+        $enable_expired_login = SwpmSettings::get_instance()->get_value( 'enable-expired-account-login', '' );
+        // Make sure cookie doesn't live beyond account expiration date.
+        // However, if expired account login is enabled then ignore if account is expired.
+        $expiration = empty( $enable_expired_login ) ? min( $expiration, $expiration_timestamp ) : $expiration;
+        $pass_frag = substr( $user_info['new_enc_password'], 8, 4 );
+        $scheme = 'auth';
+        if ( !$secure ) {
+            $secure = is_ssl();
+        }
+
+		$swpm_username = $user_info['user_name'];
+        $key = self::b_hash( $swpm_username . $pass_frag . '|' . $expiration, $scheme );
+        $hash = hash_hmac( 'md5', $swpm_username . '|' . $expiration, $key );
+        $auth_cookie = $swpm_username . '|' . $expiration . '|' . $hash;
+        $auth_cookie_name = $secure ? SIMPLE_WP_MEMBERSHIP_SEC_AUTH : SIMPLE_WP_MEMBERSHIP_AUTH;
+        setcookie( $auth_cookie_name, $auth_cookie, $expire, COOKIEPATH, COOKIE_DOMAIN, $secure, true );
 	}
 
 	public static function b_hash( $data, $scheme = 'auth' ) {
@@ -484,6 +635,23 @@ class SwpmAuth {
 			return true;
 		}
 		return false;
+	}
+
+	public function trigger_swpm_login_failed_hook($username = '') {
+		//Trigger login failed action hook.
+		if( empty( $username ) ){
+			$username = isset( $_POST['swpm_user_name'] ) ? sanitize_text_field( $_POST['swpm_user_name'] ) : '';
+		}
+		$error_msg = $this->lastStatusMsg;
+		$wp_error_obj = new WP_Error( 'swpm-login-failed', $error_msg );
+		do_action( 'swpm_login_failed', $username, $wp_error_obj );
+	}
+
+	public function trigger_swpm_authenticate_failed_hook($username) {
+		//Trigger authenticate failed action hook.
+		$error_msg = $this->lastStatusMsg;
+		$wp_error_obj = new WP_Error( 'swpm-authenticate-failed', $error_msg );
+		do_action( 'swpm_authenticate_failed', $username, $wp_error_obj );
 	}
 
 }

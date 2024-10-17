@@ -36,6 +36,9 @@ class SWPM_PayPal_Utility_IPN_Related {
 		$ipn_data['txn_id'] = $txn_id;
 		$ipn_data['subscr_id'] = $txn_id;//Same as txn_id for one-time payments.
 
+		//This will save the button ID in the swpm_transactions CPT (for a reference to the button used for the payment)
+		$ipn_data['payment_button_id'] = isset($data['button_id']) ? $data['button_id'] : '';
+
 		$ipn_data['item_number'] = isset($data['button_id']) ? $data['button_id'] : '';
 		$ipn_data['item_name'] = isset($data['item_name']) ? $data['item_name'] : '';
 
@@ -105,7 +108,30 @@ class SWPM_PayPal_Utility_IPN_Related {
 				//Convert the object to an array.
 				$order_details = json_decode(json_encode($order_details), true);
 			}
-			//SwpmLog::log_array_data_to_debug( $order_details, true );//Debugging only.
+
+			// Debug purpose only.
+			// SwpmLog::log_simple_debug( 'PayPal Order Details: ', true );
+			// SwpmLog::log_array_data_to_debug( $order_details, true );
+
+			// Check that the order's capture status is COMPLETED.
+			$status = '';
+			// Check if the necessary keys and arrays exist and are not empty
+			if (!empty($order_details['purchase_units']) && !empty($order_details['purchase_units'][0]['payments']) && !empty($order_details['purchase_units'][0]['payments']['captures'])) {
+				// Access the first item in the 'captures' array
+				$capture = $order_details['purchase_units'][0]['payments']['captures'][0];
+				$capture_id = isset($capture['id']) ? $capture['id'] : '';
+				// Check if 'status' is set for the capture
+				if (isset($capture['status'])) {
+					// Extract the 'status' value
+					$status = $capture['status'];
+				}
+			}
+			if ( strtolower($status) != strtolower('COMPLETED') ) {
+				//The order is not completed yet.
+				$validation_error_msg = 'Validation Error! The transaction status is not completed yet. Button ID: ' . $button_id . ', PayPal Capture ID: ' . $capture_id . ', Capture Status: ' . $status;
+				SwpmLog::log_simple_debug( $validation_error_msg, false );
+				return $validation_error_msg;
+			}
 
 			//Check that the amount matches with what we expect.
 			$amount = isset($order_details['purchase_units'][0]['amount']['value']) ? $order_details['purchase_units'][0]['amount']['value'] : 0;
@@ -182,11 +208,10 @@ class SWPM_PayPal_Utility_IPN_Related {
 
 	public static function is_txn_already_processed( $ipn_data ){
 		// Query the DB to check if we have already processed this transaction or not.
-		global $wpdb;
 		$txn_id = isset($ipn_data['txn_id']) ? $ipn_data['txn_id'] : '';
 		$payer_email = isset($ipn_data['payer_email']) ? $ipn_data['payer_email'] : '';
-		$txn_row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}swpm_payments_tbl WHERE txn_id = %s and email = %s", $txn_id, $payer_email ), OBJECT );
-		if (!empty($txn_row)) {
+        $txn_row = SwpmTransactions::get_transaction_row_by_txn_id_and_email($txn_id, $payer_email);
+        if (!empty($txn_row)) {
 			// And if we have already processed it, do nothing and return true
 			SwpmLog::log_simple_debug( "This transaction has already been processed (Txn ID: ".$txn_id.", Payer Email: ".$payer_email."). This looks to be a duplicate notification. Nothing to do here.", true );
 			return true;

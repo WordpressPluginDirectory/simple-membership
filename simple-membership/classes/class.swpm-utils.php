@@ -75,6 +75,25 @@ abstract class SwpmUtils {
 	}
 
 	public static function get_expiration_timestamp( $user ) {
+		//Check and make sure that the user object has a valid membership level assigned.
+        if ( !isset($user->membership_level) || !is_numeric($user->membership_level) || !SwpmMembershipLevelUtils::check_if_membership_level_exists($user->membership_level) ){
+            //This is a critical error. The user object does not have a valid membership level assigned.
+			//Log this critical error and end the script with an error message.
+			$member_id = isset($user->member_id) ? $user->member_id : '';
+			$critical_error_msg = "Error! This member profile (Member ID: ". $member_id .") does not have a valid membership level assigned. The site admin needs to assign a valid membership level to this member profile.";
+			SwpmLog::log_simple_debug($critical_error_msg, false);
+			if(is_admin()){
+				//This is getting called from the admin dashboard side. Just return from here so the rest of the code can execute.
+				//This allows the admin to edit/update the member's profile with a valid membership level.
+				return;
+			}else{
+				//This is getting called from the front-end side (example: at member login time). So we need to show a critical error message to the member and end the script.
+            	wp_die($critical_error_msg);
+				//The script will die here. So the rest of the code will not be executed.
+			}
+        }
+
+		//Get the permission object for the user's membership level
 		$permission = SwpmPermission::get_instance( $user->membership_level );
 		if ( SwpmMembershipLevel::FIXED_DATE == $permission->get( 'subscription_duration_type' ) ) {
 			return strtotime( $permission->get( 'subscription_period' ) );
@@ -159,7 +178,7 @@ abstract class SwpmUtils {
 
 	public static function get_membership_level_row_by_id( $level_id ) {
 		global $wpdb;
-		$query           = $wpdb->prepare( 'SELECT * FROM ' . $wpdb->prefix . 'swpm_membership_tbl WHERE id=%d', $level_id );
+		$query = $wpdb->prepare( 'SELECT * FROM ' . $wpdb->prefix . 'swpm_membership_tbl WHERE id=%d', $level_id );
 		$level_resultset = $wpdb->get_row( $query );
 		return $level_resultset;
 	}
@@ -508,7 +527,7 @@ abstract class SwpmUtils {
 		if ( ! empty( $user_ip ) ) {
 			//Lets check if a payment has been confirmed from this user's IP and the profile needs to be completed (where username is empty).
 			$username = '';
-			$query    = 'SELECT * FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE last_accessed_from_ip=%s AND user_name=%s';
+			$query    = 'SELECT * FROM ' . $wpdb->prefix . 'swpm_members_tbl WHERE last_accessed_from_ip=%s AND user_name=%s ORDER BY member_id DESC';
 			$query    = $wpdb->prepare( $query, $user_ip, $username );
 			$result   = $wpdb->get_row( $query );
 			return $result;
@@ -570,13 +589,17 @@ abstract class SwpmUtils {
 
 	public static function get_user_ip_address() {
 		$user_ip = '';
-		if ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) && ! empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+
+		if (isset($_SERVER['HTTP_CLIENT_IP']) && !empty($_SERVER['HTTP_CLIENT_IP'])) {
+			$user_ip = $_SERVER['HTTP_CLIENT_IP'];
+		} else if ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) && ! empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
 			$user_ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
 		} else {
 			$user_ip = $_SERVER['REMOTE_ADDR'];
 		}
 
 		if ( strstr( $user_ip, ',' ) ) {
+			// Return first IP if X-Forwarded-For contains multiple IPs.
 			$ip_values = explode( ',', $user_ip );
 			$user_ip   = $ip_values['0'];
 		}
@@ -720,4 +743,27 @@ abstract class SwpmUtils {
             "primary_address" => __("Member's address", "simple-membership"),
         );
     }
+
+	public static function get_formatted_payment_gateway_name($gateway){
+		switch ($gateway) {
+			case 'stripe':
+				return 'Stripe (Legacy)';
+			case 'stripe-sca':
+				return 'Stripe Buy Now';
+			case 'stripe-sca-subs':
+				return 'Stripe Subscription';
+			case 'paypal':
+				return 'PayPal Standard';
+			case 'paypal_std_sub_checkout':
+				return 'PayPal Standard Subscription';
+			case 'paypal_buy_now_checkout':
+				return 'PayPal Buy Now (PPCP)';
+			case 'paypal_subscription_checkout':
+				return 'PayPal Subscription (PPCP)';
+			case 'braintree':
+				return 'Braintree';				
+			default:
+				return $gateway;
+		}
+	}
 }

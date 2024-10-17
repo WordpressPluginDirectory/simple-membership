@@ -9,7 +9,8 @@ class SwpmMiscUtils {
 
 		//Create join us page
 		$swpm_join_page_content  = '<p style="color:red;font-weight:bold;">This page and the content has been automatically generated for you to give you a basic idea of how a "Join Us" page should look like. You can customize this page however you like it by editing this page from your WordPress page editor.</p>';
-		$swpm_join_page_content .= '<p style="font-weight:bold;">If you end up changing the URL of this page then make sure to update the URL value in the settings menu of the plugin.</p>';
+		$swpm_join_page_content .= '<p style="font-weight:bold;">If you change the URL of this page, make sure to update the URL value in the settings menu of the plugin.</p>';
+		$swpm_join_page_content .= '<p style="font-weight:bold;">If you delete any of the essential pages required by the plugin, <a href="https://simple-membership-plugin.com/recreating-required-pages-simple-membership-plugin/" target="_blank">this documentation</a> will guide you in recreating them.</p>';
 		$swpm_join_page_content .= '<p style="border-top:1px solid #ccc;padding-top:10px;margin-top:10px;"></p>
 			<strong>Free Membership</strong>
 			<br />
@@ -323,10 +324,12 @@ class SwpmMiscUtils {
 		$password = '';
 		$password_reset_link = '';
 		$reg_link = '';
+		$subscription_id = '';
 		if ( ! empty( $additional_args ) ) {
 			$password = isset( $additional_args['password'] ) ? $additional_args['password'] : $password;
 			$reg_link = isset( $additional_args['reg_link'] ) ? $additional_args['reg_link'] : $reg_link;
 			$password_reset_link = isset( $additional_args['password_reset_link'] ) ? $additional_args['password_reset_link'] : $password_reset_link;
+			$subscription_id = isset($additional_args['subscription_id']) ? $additional_args['subscription_id'] : '';
 		}
 		
 		$login_link = $settings->get_value( 'login-page-url' );
@@ -371,7 +374,8 @@ class SwpmMiscUtils {
 			'{login_link}',
 			'{reg_link}',
 			'{primary_address}',
-			'{password_reset_link}'
+			'{password_reset_link}',
+			'{subscription_id}',
 		);
 
 		//Define the values
@@ -393,6 +397,7 @@ class SwpmMiscUtils {
 			$reg_link,
 			$primary_address,
 			$password_reset_link,
+			$subscription_id,
 		);
 		
 		$msg_body = str_replace( $tags, $vals, $msg_body );
@@ -401,8 +406,11 @@ class SwpmMiscUtils {
 	}
 
 	public static function get_login_link() {
-		$login_url  = SwpmSettings::get_instance()->get_value( 'login-page-url' );
-		$joinus_url = SwpmSettings::get_instance()->get_value( 'join-us-page-url' );
+		$swpm_settings = SwpmSettings::get_instance();
+		$login_url = $swpm_settings->get_value( 'login-page-url' );
+		$joinus_url = $swpm_settings->get_value( 'join-us-page-url' );
+		$hide_join_us_link_enabled = $swpm_settings->get_value('hide-join-us-link');
+
 		if ( empty( $login_url ) || empty( $joinus_url ) ) {
 			return '<span style="color:red;">Simple Membership is not configured correctly. The login page or the join us page URL is missing in the settings configuration. '
 					. 'Please contact <a href="mailto:' . get_option( 'admin_email' ) . '">Admin</a>';
@@ -410,10 +418,13 @@ class SwpmMiscUtils {
 
 		//Create the login/protection message
 		$filtered_login_url = apply_filters( 'swpm_get_login_link_url', $login_url ); //Addons can override the login URL value using this filter.
-		$login_msg          = '';
-		$login_msg         .= SwpmUtils::_( 'Please' ) . ' <a class="swpm-login-link" href="' . $filtered_login_url . '">' . SwpmUtils::_( 'Log In' ) . '</a>. ';
-		$login_msg         .= SwpmUtils::_( 'Not a Member?' ) . ' <a href="' . $joinus_url . '">' . SwpmUtils::_( 'Join Us' ) . '</a>';
+		$login_msg = '';
+		$login_msg .= SwpmUtils::_( 'Please' ) . ' <a class="swpm-login-link" href="' . $filtered_login_url . '">' . SwpmUtils::_( 'Log In' ) . '</a>. ';
 
+		if (empty($hide_join_us_link_enabled)){
+			//Show the join us option
+			$login_msg .= SwpmUtils::_( 'Not a Member?' ) . ' <a href="' . $joinus_url . '">' . SwpmUtils::_( 'Join Us' ) . '</a>';
+		}
 		return $login_msg;
 	}
 
@@ -970,7 +981,7 @@ class SwpmMiscUtils {
 		}
 		$countries_dropdown = '';
 		//let's add "(Please select)" option
-		$countries_dropdown .= "\r\n" . '<option value=""' . ( $country == '' ? ' selected' : '' ) . '>' . SwpmUtils::_( '(Please Select)' ) . '</option>';
+		$countries_dropdown .= "\r\n" . '<option value=""' . ( $country == '' ? ' selected' : '' ) . '>' . __( '(Please Select)', 'simple-membership' ) . '</option>';
 		if ( $guess_country == '' && $country != '' ) {
 			//since we haven't guessed the country name, let's add current value to the options
 			$countries_dropdown .= "\r\n" . '<option value="' . $country . '" selected>' . $country . '</option>';
@@ -979,7 +990,7 @@ class SwpmMiscUtils {
 			$country = $guess_country;
 		}
 		foreach ( $countries as $country_name ) {
-			$countries_dropdown .= "\r\n" . '<option value="' . $country_name . '"' . ( strtolower( $country_name ) == strtolower( $country ) ? ' selected' : '' ) . '>' . $country_name . '</option>';
+			$countries_dropdown .= "\r\n" . '<option value="' . $country_name . '"' . ( strtolower( $country_name ) == strtolower( $country ) ? ' selected' : '' ) . '>' . __($country_name, 'simple-membership') . '</option>';
 		}
 		return $countries_dropdown;
 	}

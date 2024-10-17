@@ -26,8 +26,9 @@ class SwpmStripeCheckoutSessionCreate{
 		//Check if payment_method_types is being used in the shortcode.
 		$payment_method_types = isset( $_POST['payment_method_types'] ) ? sanitize_text_field( stripslashes ( $_POST['payment_method_types'] ) ) : '';
 		if ( empty( $payment_method_types ) ) {
-        	//Use the default payment_method_types value.
-			$payment_method_types_array = array( 'card' );
+			//Use the empty value so it can be managed from the seller's Stripe account settings.
+			$payment_method_types_array = array();
+			//$payment_method_types_array = array( 'card' );//Legacy value
 		} else {
 			//Use the payment_method_types specified in the shortcode (example value: card,us_bank_account
 			$payment_method_types_array = array_map( 'trim', explode (",", $payment_method_types) );
@@ -113,9 +114,9 @@ class SwpmStripeCheckoutSessionCreate{
 			$notify_url = sprintf( SIMPLE_WP_MEMBERSHIP_SITE_HOME_URL . '/?swpm_process_stripe_sca_subscription=1&ref_id=%s', $ref_id );
 		}
 
-		$current_url_posted = filter_input( INPUT_POST, 'swpm_page_url', FILTER_SANITIZE_URL );
-
-		$current_url = ! empty( $current_url_posted ) ? $current_url_posted : SIMPLE_WP_MEMBERSHIP_SITE_HOME_URL;
+		// The url to redirect to when user clicks on the back button in the stripe sca buy now button checkout page. If no url set, there will be no back button.
+		$cancel_url = get_post_meta( $button_id, 'cancel_url', true );
+		$cancel_url = ! empty( $cancel_url ) ? sanitize_text_field($cancel_url) : SIMPLE_WP_MEMBERSHIP_SITE_HOME_URL;
 
 		//prefill member email
 		$prefill_member_email = $settings->get_value( 'stripe-prefill-member-email' );
@@ -134,7 +135,6 @@ class SwpmStripeCheckoutSessionCreate{
 			if ( empty( $plan_id ) ) {
 				//this is one-off payment
 				$opts = array(
-					'payment_method_types'       => $payment_method_types_array,
 					'client_reference_id'        => $ref_id,
 					'billing_address_collection' => $billing_address ? 'required' : 'auto',					
 					'line_items' => array(
@@ -152,12 +152,11 @@ class SwpmStripeCheckoutSessionCreate{
 					),					
 					'mode' => 'payment',
 					'success_url'                => $notify_url,
-					'cancel_url'                 => $current_url,
+					'cancel_url'                 => $cancel_url,
 				);
 			} else {
 				//this is subscription payment
 				$opts = array(
-					'payment_method_types'       => $payment_method_types_array,
 					'client_reference_id'        => $ref_id,
 					'billing_address_collection' => $billing_address ? 'required' : 'auto',					
 					'line_items' => array(
@@ -169,7 +168,7 @@ class SwpmStripeCheckoutSessionCreate{
 				),
 					'mode' => 'subscription',
 					'success_url'                => $notify_url,
-					'cancel_url'                 => $current_url,
+					'cancel_url'                 => $cancel_url,
 				);
 
 				$trial_period = get_post_meta( $button_id, 'stripe_trial_period', true );
@@ -179,16 +178,29 @@ class SwpmStripeCheckoutSessionCreate{
 				}
 			}
 
+			//Set payment method types (if used in the shortcode). Otherwise, let Stripe use the default value.
+			if( !empty( $payment_method_types_array ) ) {
+				$opts['payment_method_types'] = $payment_method_types_array;
+			}
+
+			//Set the logo for the line item.
 			if ( ! empty( $item_logo ) ) {
 				$opts['line_items'][0]["product_data"]['images'] = array( $item_logo );
 			}
 
+			//Set the customer email.
 			if ( ! empty( $member_email ) ) {
 				$opts['customer_email'] = $member_email;
 			}
 
+			//Set the automatic tax feature.
 			if( $automatic_tax == true ) {
 				$opts["automatic_tax"] = array( "enabled" => true );
+			}
+
+			$allow_promotion_codes = get_post_meta( $button_id, 'allow_promotion_codes', true );
+			if ( !empty($allow_promotion_codes) && $allow_promotion_codes == '1' ) {
+				$opts["allow_promotion_codes"] = true;
 			}
 			
 			$opts = apply_filters( 'swpm_stripe_sca_session_opts', $opts, $button_id );

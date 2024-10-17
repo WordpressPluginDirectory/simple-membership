@@ -105,39 +105,6 @@ class SwpmSettings {
 				'message' => SwpmUtils::_( 'Enables or disables "more" tag protection in the posts and pages. Anything after the More tag is protected. Anything before the more tag is teaser content.' ),
 			)
 		);
-		add_settings_field(
-			'hide-adminbar',
-			SwpmUtils::_( 'Hide Adminbar' ),
-			array( &$this, 'checkbox_callback' ),
-			'simple_wp_membership_settings',
-			'general-settings',
-			array(
-				'item'    => 'hide-adminbar',
-				'message' => SwpmUtils::_( 'WordPress shows an admin toolbar to the logged in users of the site. Check this if you want to hide that admin toolbar in the frontend of your site.' ),
-			)
-		);
-		add_settings_field(
-			'show-adminbar-admin-only',
-			SwpmUtils::_( 'Show Adminbar to Admin' ),
-			array( &$this, 'checkbox_callback' ),
-			'simple_wp_membership_settings',
-			'general-settings',
-			array(
-				'item'    => 'show-adminbar-admin-only',
-				'message' => SwpmUtils::_( 'Use this option if you want to show the admin toolbar to admin users only. The admin toolbar will be hidden for all other users.' ),
-			)
-		);
-		add_settings_field(
-			'disable-access-to-wp-dashboard',
-			SwpmUtils::_( 'Disable Access to WP Dashboard' ),
-			array( &$this, 'checkbox_callback' ),
-			'simple_wp_membership_settings',
-			'general-settings',
-			array(
-				'item'    => 'disable-access-to-wp-dashboard',
-				'message' => SwpmUtils::_( 'WordPress allows a standard wp user to be able to go to the wp-admin URL and access his profile from the wp dashboard. Using this option will prevent any non-admin users from going to the wp dashboard.' ),
-			)
-		);
 
 		add_settings_field(
 			'default-account-status',
@@ -296,21 +263,47 @@ class SwpmSettings {
 			admin_url( 'admin.php' )
 		);
 
-		$reset_log_url = add_query_arg(
-			array(
-				'page'           => 'simple_wp_membership_settings',
-				'swpm_reset_log' => '1',
-				'_wpnonce'       => wp_create_nonce( 'swpm_reset_log' ),
-			),
-			admin_url( 'admin.php' )
-		);
-
-		$debug_field_help_text  = SwpmUtils::_( 'Check this option to enable debug logging.' );
-		$debug_field_help_text .= SwpmUtils::_( ' This can be useful when troubleshooting an issue. Turn it off and reset the log files after the troubleshooting is complete.' );
+		$debug_field_help_text  = __( 'Check this option to enable debug logging.', 'simple-membership' );
+		$debug_field_help_text .= __( ' This can be useful when troubleshooting an issue. Turn it off and reset the log files after the troubleshooting is complete.', 'simple-membership' );
 		$debug_field_help_text .= '<br />';
-		$debug_field_help_text .= '<br />- ' . SwpmUtils::_( 'View general debug log file by clicking ' ) . '<a href="' . $debug_log_url . '" target="_blank">' . SwpmUtils::_( 'here' ) . '</a>.';
-		$debug_field_help_text .= '<br />- ' . SwpmUtils::_( 'View login related debug log file by clicking ' ) . '<a href="' . $auth_log_url . '" target="_blank">' . SwpmUtils::_( 'here' ) . '</a>.';
-		$debug_field_help_text .= '<br />- ' . SwpmUtils::_( 'Reset debug log files by clicking ' ) . '<a href="' . $reset_log_url . '" target="_blank">' . SwpmUtils::_( 'here' ) . '</a>.';
+		$debug_field_help_text .= '<br />- ' . __( 'View general debug log file by ', 'simple-membership' ) . '<a href="' . $debug_log_url . '" target="_blank">' . __( 'clicking here', 'simple-membership' ) . '</a>.';
+		$debug_field_help_text .= '<br />- ' . __( 'View login related debug log file by ', 'simple-membership' ) . '<a href="' . $auth_log_url . '" target="_blank">' . __( 'clicking here', 'simple-membership' ) . '</a>.';
+		$debug_field_help_text .= '<br />- ' . __( 'Reset debug log files by ', 'simple-membership' ) . '<a href="javascript:void(0)" style="color: #CC0000;" id="swpm_reset_log_anchor">' . __( 'clicking here', 'simple-membership') . '</a>.';
+		ob_start();
+        ?>
+        <script>
+            document.addEventListener('DOMContentLoaded', function (){
+                const swpm_reset_log_anchor = document.getElementById('swpm_reset_log_anchor');
+                swpm_reset_log_anchor.addEventListener('click', function (e){
+                    e.preventDefault();
+                    const ajaxUrl = '<?php echo admin_url( 'admin-ajax.php' )?>';
+                    const payload = new URLSearchParams();
+                    payload.append('action', 'swpm_reset_log_action');
+                    payload.append('nonce',  '<?php echo esc_js( wp_create_nonce( 'swpm_reset_log_action' ) ) ?>');
+                    fetch(
+                        ajaxUrl,
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: payload.toString()
+                        }
+                    ).then((response) => {
+                        return response.json();
+                    }).then((res) => {
+                        alert(res.data.message);
+                    }).catch(err => {
+                        alert('The ajax request to reset the log files has failed unexpectedly. Please try again later.');
+                    })
+                });
+            })
+
+
+        </script>
+        <?php
+		$debug_field_help_text .= ob_get_clean();
+
 		add_settings_field(
 			'enable-debug',
 			SwpmUtils::_( 'Enable Debug' ),
@@ -602,6 +595,64 @@ class SwpmSettings {
 				'message' => '',
 			)
 		);
+
+		//Subscription Cancel email settings.
+		add_settings_section( 'subscription-cancel-email-settings', __( ' Email Settings (Subscription Payment Canceled or Expired)', 'simple-membership'), array( &$this, 'subscription_cancel_email_settings_callback' ), 'simple_wp_membership_settings' );
+		add_settings_field(
+			'subscription-cancel-member-mail-enable',
+			__( 'Send Notification to Member', 'simple-membership'),
+			array( &$this, 'checkbox_callback' ),
+			'simple_wp_membership_settings',
+			'subscription-cancel-email-settings',
+			array(
+				'item'    => 'subscription-cancel-member-mail-enable',
+				'message' => __( 'Enable this option to send an email notification to members when their subscription payment is canceled or expires.', 'simple-membership'),
+			)
+		);
+        add_settings_field(
+			'subscription-cancel-member-mail-subject',
+			__( 'Email Subject', 'simple-membership'),
+			array( &$this, 'textfield_callback' ),
+			'simple_wp_membership_settings',
+			'subscription-cancel-email-settings',
+			array(
+				'item'    => 'subscription-cancel-member-mail-subject',
+				'message' => '',
+			)
+		);
+		add_settings_field(
+			'subscription-cancel-member-mail-body',
+			__( 'Email Body', 'simple-membership'),
+			array( &$this, 'wp_editor_callback' ),
+			'simple_wp_membership_settings',
+			'subscription-cancel-email-settings',
+			array(
+				'item'    => 'subscription-cancel-member-mail-body',
+				'message' => '',
+			)
+		);
+		add_settings_field(
+			'subscription-cancel-admin-mail-enable',
+			__( 'Send Notification to Admin', 'simple-membership'),
+			array( &$this, 'checkbox_callback' ),
+			'simple_wp_membership_settings',
+			'subscription-cancel-email-settings',
+			array(
+				'item'    => 'subscription-cancel-admin-mail-enable',
+				'message' => __( 'Enable this option to send a notification to the admin.', 'simple-membership'),
+			)
+		);
+		add_settings_field(
+			'subscription-cancel-admin-mail-address',
+			__( 'Admin Email Address', 'simple-membership' ),
+			array( &$this, 'textfield_callback' ),
+			'simple_wp_membership_settings',
+			'subscription-cancel-email-settings',
+			array(
+				'item'    => 'subscription-cancel-admin-mail-address',
+				'message' => __( 'Enter the email address where you want the admin notification email to be sent to.', 'simple-membership'),
+			)
+		);
 	}
 
 	private function tab_4() {
@@ -660,6 +711,18 @@ class SwpmSettings {
 			array(
 				'item'    => 'auto-login-after-rego',
 				'message' => SwpmUtils::_( 'Use this option if you want the members to be automatically logged into your site right after they complete the registration. This option will override any after registration redirection and instead it will trigger the after login redirection. Read <a href="https://simple-membership-plugin.com/configure-auto-login-after-registration-members/" target="_blank">this documentation</a> to learn more.' ),
+			)
+		);
+
+		add_settings_field(
+			'hide-join-us-link',
+			__( 'Hide the Join Us Link' , 'simple-membership'),
+			array( &$this, 'checkbox_callback' ),
+			'simple_wp_membership_settings',
+			'advanced-settings',
+			array(
+				'item'    => 'hide-join-us-link',
+				'message' => __( "Select this option to hide the 'Join Us' link if you prefer visitors not to see the registration option on your site. Refer to <a href='https://simple-membership-plugin.com/hiding-join-option-from-visitors/' target='_blank'>this documentation</a> to learn more." , "simple-membership"),
 			)
 		);
 
@@ -786,13 +849,49 @@ class SwpmSettings {
 
 		add_settings_field(
 			'use-new-form-ui',
-			__( 'Activate New Form and Validation Interface (Beta)', 'simple-membership' ),
+			__( 'Activate New Form and Validation Interface', 'simple-membership' ),
 			array( &$this, 'checkbox_callback' ),
 			'simple_wp_membership_settings',
 			'advanced-settings',
 			array(
 				'item'    => 'use-new-form-ui',
 				'message' => __( 'Enable the improved user interface for registration and profile editing, featuring enhanced validation that adapts seamlessly across various devices and screen sizes.' ),
+			)
+		);
+
+		add_settings_field(
+			'hide-adminbar',
+			__( 'Hide Adminbar' , 'simple-membership'),
+			array( &$this, 'checkbox_callback' ),
+			'simple_wp_membership_settings',
+			'advanced-settings',
+			array(
+				'item'    => 'hide-adminbar',
+				'message' => __( 'WordPress shows an admin toolbar to the logged in users of the site. Check this if you want to hide that admin toolbar in the frontend of your site.' , 'simple-membership'),
+			)
+		);
+
+		add_settings_field(
+			'show-adminbar-admin-only',
+			__( 'Show Adminbar to Admin' , 'simple-membership'),
+			array( &$this, 'checkbox_callback' ),
+			'simple_wp_membership_settings',
+			'advanced-settings',
+			array(
+				'item'    => 'show-adminbar-admin-only',
+				'message' => __( 'Use this option if you want to show the admin toolbar to admin users only. The admin toolbar will be hidden for all other users.' , 'simple-membership'),
+			)
+		);
+
+		add_settings_field(
+			'disable-access-to-wp-dashboard',
+			__( 'Disable Access to WP Dashboard' , 'simple-membership'),
+			array( &$this, 'checkbox_callback' ),
+			'simple_wp_membership_settings',
+			'advanced-settings',
+			array(
+				'item'    => 'disable-access-to-wp-dashboard',
+				'message' => __( 'WordPress allows a standard wp user to be able to go to the wp-admin URL and access his profile from the wp dashboard. Using this option will prevent any non-admin users from going to the wp dashboard.' , 'simple-membership'),
 			)
 		);
 
@@ -1102,16 +1201,6 @@ class SwpmSettings {
 	}
 
 	public function swpm_general_post_submit_check_callback() {
-		//Log file reset handler
-		if ( isset( $_REQUEST['swpm_reset_log'] ) ) {
-			check_admin_referer( 'swpm_reset_log' );
-			if ( SwpmLog::reset_swmp_log_files() ) {
-				echo '<div id="message" class="updated fade"><p>Debug log files have been reset!</p></div>';
-			} else {
-				echo '<div id="message" class="updated fade"><p>Debug log files could not be reset!</p></div>';
-			}
-		}
-
 		//Show settings updated message
 		if ( isset( $_REQUEST['settings-updated'] ) ) {
 			echo '<div id="message" class="updated fade"><p>' . SwpmUtils::_( 'Settings updated!' ) . '</p></div>';
@@ -1184,6 +1273,10 @@ class SwpmSettings {
 
 	public function email_activation_email_settings_callback() {
 		_e( 'This email will be sent if Email Activation is enabled for a Membership Level.', 'simple-membership' );
+	}
+
+    public function subscription_cancel_email_settings_callback() {
+		_e( 'This email will be sent when a member\'s subscription is canceled or expires.', 'simple-membership' );
 	}
 
 	public function reg_prompt_email_settings_callback() {
@@ -1263,10 +1356,6 @@ class SwpmSettings {
 		$output = $this->settings;
 		//general settings block
 
-		$output['hide-adminbar']                  = isset( $input['hide-adminbar'] ) ? esc_attr( $input['hide-adminbar'] ) : '';
-		$output['show-adminbar-admin-only']       = isset( $input['show-adminbar-admin-only'] ) ? esc_attr( $input['show-adminbar-admin-only'] ) : '';
-		$output['disable-access-to-wp-dashboard'] = isset( $input['disable-access-to-wp-dashboard'] ) ? esc_attr( $input['disable-access-to-wp-dashboard'] ) : '';
-
 		$output['protect-everything']     = isset( $input['protect-everything'] ) ? esc_attr( $input['protect-everything'] ) : '';
 		$output['enable-free-membership'] = isset( $input['enable-free-membership'] ) ? esc_attr( $input['enable-free-membership'] ) : '';
 		$output['enable-moretag']         = isset( $input['enable-moretag'] ) ? esc_attr( $input['enable-moretag'] ) : '';
@@ -1318,6 +1407,13 @@ class SwpmSettings {
 		$output['email-activation-mail-subject'] = sanitize_text_field( $input['email-activation-mail-subject'] );
 		$output['email-activation-mail-body']    = wp_kses_post( $input['email-activation-mail-body'] );
 
+		$output['subscription-cancel-member-mail-enable']       = isset( $input['subscription-cancel-member-mail-enable'] ) ? esc_attr( $input['subscription-cancel-member-mail-enable'] ) : '';
+		$output['subscription-cancel-member-mail-subject']    = sanitize_text_field( $input['subscription-cancel-member-mail-subject'] );
+		$output['subscription-cancel-member-mail-body']    = wp_kses_post( $input['subscription-cancel-member-mail-body'] );
+
+        $output['subscription-cancel-admin-mail-enable']       = isset( $input['subscription-cancel-admin-mail-enable'] ) ? esc_attr( $input['subscription-cancel-admin-mail-enable'] ) : '';
+        $output['subscription-cancel-admin-mail-address'] = sanitize_text_field( $input['subscription-cancel-admin-mail-address'] );
+
 		$output['reg-prompt-complete-mail-subject'] = sanitize_text_field( $input['reg-prompt-complete-mail-subject'] );
 		$output['reg-prompt-complete-mail-body']    = wp_kses_post( $input['reg-prompt-complete-mail-body'] );
 		$output['email-from']                       = trim( $input['email-from'] );
@@ -1346,9 +1442,13 @@ class SwpmSettings {
 		$output['force-strong-passwords']            = isset( $input['force-strong-passwords'] ) ? esc_attr( $input['force-strong-passwords'] ) : '';
 		$output['auto-login-after-rego']             = isset( $input['auto-login-after-rego'] ) ? esc_attr( $input['auto-login-after-rego'] ) : '';
                 $output['hide-rego-form-to-logged-users']    = isset( $input['hide-rego-form-to-logged-users'] ) ? esc_attr( $input['hide-rego-form-to-logged-users'] ) : '';
+		$output['hide-join-us-link']                = isset( $input['hide-join-us-link'] ) ? esc_attr( $input['hide-join-us-link'] ) : '';
 		$output['force-wp-user-sync']                = isset( $input['force-wp-user-sync'] ) ? esc_attr( $input['force-wp-user-sync'] ) : '';
 		$output['payment-notification-forward-url']  = esc_url( $input['payment-notification-forward-url'] );
 		$output['use-new-form-ui']            		 = isset( $input['use-new-form-ui'] ) ? esc_attr( $input['use-new-form-ui'] ) : '';
+		$output['hide-adminbar']                  = isset( $input['hide-adminbar'] ) ? esc_attr( $input['hide-adminbar'] ) : '';
+		$output['show-adminbar-admin-only']       = isset( $input['show-adminbar-admin-only'] ) ? esc_attr( $input['show-adminbar-admin-only'] ) : '';
+		$output['disable-access-to-wp-dashboard'] = isset( $input['disable-access-to-wp-dashboard'] ) ? esc_attr( $input['disable-access-to-wp-dashboard'] ) : '';
 
 		//Auto create swpm user related settings
 		$output['enable-auto-create-swpm-members']      = isset( $input['enable-auto-create-swpm-members'] ) ? esc_attr( $input['enable-auto-create-swpm-members'] ) : '';

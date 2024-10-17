@@ -18,15 +18,16 @@ class SwpmMembers extends WP_List_Table {
 	function get_columns() {
 		$columns = array(
 			'cb'                  => '<input type="checkbox" />',
-			'member_id'           => SwpmUtils::_( 'ID' ),
-			'user_name'           => SwpmUtils::_( 'Username' ),
-			'first_name'          => SwpmUtils::_( 'First Name' ),
-			'last_name'           => SwpmUtils::_( 'Last Name' ),
-			'email'               => SwpmUtils::_( 'Email' ),
-			'alias'               => SwpmUtils::_( 'Membership Level' ),
-			'subscription_starts' => SwpmUtils::_( 'Access Starts' ),
-			'account_state'       => SwpmUtils::_( 'Account State' ),
-			'last_accessed'       => SwpmUtils::_( 'Last Login Date' ),
+			'member_id'           => __('ID' , 'simple-membership'),
+			'user_name'           => __('Username' , 'simple-membership'),
+			'first_name'          => __('First Name' , 'simple-membership'),
+			'last_name'           => __('Last Name' , 'simple-membership'),
+			'email'               => __('Email' , 'simple-membership'),
+			'alias'               => __('Membership Level' , 'simple-membership'),
+			'subscription_starts' => __('Access Starts' , 'simple-membership'),
+			'account_state'       => __('Account State' , 'simple-membership'),
+			'last_accessed'       => __('Last Login Date' , 'simple-membership'),
+			'admin_notes'         => __('Notes' , 'simple-membership'),
 		);
 		return apply_filters( 'swpm_admin_members_table_columns', $columns );
 	}
@@ -92,6 +93,38 @@ class SwpmMembers extends WP_List_Table {
 		return $user_name;
 	}
 
+	function column_admin_notes( $item ) {
+		$admin_notes = isset($item['notes']) ? $item['notes'] : '';
+		if ( empty( $admin_notes ) ) {
+			//Admin notes not found for this member.
+			return '&mdash;';
+		}
+
+		//Truncate the admin notes if it is too long.
+		$max_length = 256;
+		if (strlen($admin_notes) > $max_length) {
+			$admin_notes_text = substr($admin_notes, 0, $max_length) . ' ... ';
+		} else {
+			$admin_notes_text = $admin_notes;
+		}
+		
+		//Display the notes in a tooltip.
+		$member_id = intval($item['member_id']);
+		$notes_tooltip_id = 'swpm_note_tooltip_' . $member_id;
+        ob_start();
+        ?>
+        <div class="swpm-tooltip-notes-container">
+			<a href="javascript:void(0)" onclick="const tooltip=document.getElementById('<?php echo $notes_tooltip_id; ?>'); tooltip.style.display = (tooltip.style.display === 'block' ? 'none' : 'block');">
+    		<?php _e('Show/Hide Notes', 'simple-membership'); ?>
+			</a>
+            <div class="swpm-tooltip-notes-style-1" id="<?php echo esc_attr($notes_tooltip_id)?>" onclick="this.style.display='none'">
+				<?php echo esc_attr($admin_notes_text) ?>
+			</div>
+        </div>
+        <?php
+	    return ob_get_clean();
+    }
+
 	function column_cb( $item ) {
 		return sprintf(
 			'<input type="checkbox" name="members[]" value="%s" />',
@@ -104,7 +137,7 @@ class SwpmMembers extends WP_List_Table {
 
 		$this->process_bulk_action();
 
-		$records_query_head = 'SELECT member_id,user_name,first_name,last_name,email,alias,subscription_starts,account_state,last_accessed';
+		$records_query_head = 'SELECT member_id,user_name,first_name,last_name,email,alias,subscription_starts,account_state,notes,last_accessed';
 		$count_query_head   = 'SELECT COUNT(member_id)';
 
 		$query  = ' ';
@@ -243,11 +276,35 @@ class SwpmMembers extends WP_List_Table {
 			return $this->edit( absint( $record_id ) );
 		}
 
-		//This is an profile add action.
+		//This is a profile add action.
 		return $this->add();
 	}
 
+    public static function membership_lvl_not_configured_msg_box()
+    {
+        $output = '<div class="swpm-yellow-box">';
+        $output .= '<p>';
+        $output .= __("Each member account must be assigned a membership level. It appears that you don't have any membership levels configured. Please create a membership level first before adding or editing any member records.", 'simple-membership');
+        $output .= '</p>';
+		$output .= '<p>';
+		$output .= __("Read the ", 'simple-membership');
+		$output .= '<a href="https://simple-membership-plugin.com/adding-membership-access-levels-site/" target="_blank">' . __("membership level documentation", 'simple-membership') . '</a>';
+		$output .= __(" to learn how to create a membership level.", 'simple-membership');
+		$output .= '</p>';
+        $output .= '<br />';
+        $output .= '<a href="'. admin_url() . 'admin.php?page=simple_wp_membership_levels&level_action=add" class="button button-primary">';
+        $output .= __('Create a Membership Level', 'simple-membership');
+        $output .= '</a>';
+        $output .= '</div>';
+        return $output;
+    }
+
 	function add() {
+        if(!SwpmMembershipLevelUtils::is_membership_level_configured()){
+            echo self::membership_lvl_not_configured_msg_box();
+            return;
+        }
+
 		$form = apply_filters( 'swpm_admin_registration_form_override', '' );
 		if ( ! empty( $form ) ) {
 			echo $form;
@@ -277,10 +334,23 @@ class SwpmMembers extends WP_List_Table {
 	}
 
 	function edit( $id ) {
+        if(!SwpmMembershipLevelUtils::is_membership_level_configured()){
+            echo self::membership_lvl_not_configured_msg_box();
+            return;
+        }
+
 		global $wpdb;
-		$id     = absint( $id );
-		$query  = "SELECT * FROM {$wpdb->prefix}swpm_members_tbl WHERE member_id = $id";
+		$id = absint( $id );
+		$query = "SELECT * FROM {$wpdb->prefix}swpm_members_tbl WHERE member_id = $id";
 		$member = $wpdb->get_row( $query, ARRAY_A );
+		if ( ! $member ) {
+			//Member record not found. Show an error message.
+			$error_msg = __( 'Error! Member record not found. You may have deleted this member profile. ', 'simple-membership' );
+			$error_msg .= __( 'Please go back to the members menu and try to edit another member profile.', 'simple-membership' );
+			echo '<div class="swpm-erro-msg swpm-red-box"><p>' . $error_msg . '</p></div>';
+			return;
+		}
+
 		if ( isset( $_POST['editswpmuser'] ) ) {
 			$_POST['user_name'] = sanitize_text_field( $member['user_name'] );
 			$_POST['email']     = sanitize_email( $member['email'] );
@@ -307,7 +377,7 @@ class SwpmMembers extends WP_List_Table {
 
 		include_once $edit_user_template_path;
 
-		return false;
+		return;
 	}
 
 	function process_bulk_action() {
@@ -448,79 +518,41 @@ class SwpmMembers extends WP_List_Table {
 		}
 	}
 
-	private static function delete_user_subs( $id ) {
-		$member = SwpmMemberUtils::get_user_by_id( $id );
+	private static function delete_user_subs( $member_id ) {
+
+		$member = SwpmMemberUtils::get_user_by_id( $member_id );
+
 		if ( ! $member ) {
 			return false;
 		}
-		// let's check if Stripe subscription needs to be cancelled
-		global $wpdb;
-		$q = $wpdb->prepare(
-			'SELECT *
-		FROM  `' . $wpdb->prefix . 'swpm_payments_tbl`
-		WHERE email =  %s
-		AND (gateway =  "stripe" OR gateway = "stripe-sca-subs")
-		AND subscr_id != ""',
-			array( $member->email )
-		);
 
-		$res = $wpdb->get_results( $q, ARRAY_A );
+		SwpmLog::log_simple_debug("Cancelling all subscription of member id: " . $member_id, true);
 
-		if ( ! $res ) {
+        $subscription_utils = new SWPM_Utils_Subscriptions($member_id);
+        $subscription_utils->load_subs_data();
+
+		$active_subs = $subscription_utils->get_active_subscriptions();
+
+		if ( empty($active_subs) ) {
+		    SwpmLog::log_simple_debug("No active subscriptions found for member ID: " . $member_id, true);
 			return false;
 		}
 
-		foreach ( $res as $sub ) {
+		SwpmLog::log_simple_debug("Active subscriptions found for member ID: " . $member_id, true);
+		SwpmLog::log_simple_debug( "Active subscription IDs: ". implode(', ', array_keys($active_subs)) , true);
 
-			if ( substr( $sub['subscr_id'], 0, 4 ) !== 'sub_' ) {
-				//not Stripe subscription
-				continue;
-			}
-
-			//let's find the payment button
-			$q        = $wpdb->prepare( "SELECT post_id FROM {$wpdb->prefix}postmeta WHERE meta_key='subscr_id' AND meta_value=%s", $sub['subscr_id'] );
-			$res_post = $wpdb->get_row( $q );
-
-			if ( ! $res_post ) {
-				//no button found
-				continue;
-			}
-
-			$button_id = get_post_meta( $res_post->post_id, 'payment_button_id', true );
-
-			$button = get_post( $button_id );
-
-			if ( ! $button ) {
-				//no button found
-				continue;
-			}
-
-			SwpmLog::log_simple_debug( 'Attempting to cancel Stripe Subscription ' . $sub['subscr_id'], true );
-
-			$is_live = get_post_meta( $button_id, 'is_live', true );
-
-			//API Keys
-			$api_keys = SwpmMiscUtils::get_stripe_api_keys_from_payment_button( $button_id, $is_live );
-
-			//Include the Stripe library.
-			SwpmMiscUtils::load_stripe_lib();
-
-			\Stripe\Stripe::setApiKey( $api_keys['secret'] );
-
-			$error = null;
-			// Let's try to cancel subscription
-			try {
-				$sub = \Stripe\Subscription::retrieve( $sub['subscr_id'] );
-				$sub->cancel();
-			} catch ( Exception $e ) {
-				SwpmLog::log_simple_debug( 'Error occurred during Stripe Subscription cancellation. ' . $e->getMessage(), false );
-				$body         = $e->getJsonBody();
-				$error        = $body['error'];
-				$error_string = wp_json_encode( $error );
-				SwpmLog::log_simple_debug( 'Error details: ' . $error_string, false );
-			}
-			if ( ! isset( $error ) ) {
-				SwpmLog::log_simple_debug( 'Stripe Subscription has been cancelled.', true );
+		foreach ( $active_subs as $sub ) {
+			switch($sub['gateway']){
+				case 'stripe-sca-subs':
+                    SwpmLog::log_simple_debug("Cancelling Stripe SCA subscription with subscription ID: ". $sub['sub_id'], true);
+					$subscription_utils->cancel_subscription_stripe_sca( $sub['sub_id'] );
+					break;
+				case 'paypal_subscription_checkout':
+                    SwpmLog::log_simple_debug("Cancelling PayPal PPCP subscription with subscription ID: ". $sub['sub_id'], true);
+					$subscription_utils->cancel_subscription_paypal( $sub['sub_id'] );
+					break;
+				default:
+					break;
 			}
 		}
 	}

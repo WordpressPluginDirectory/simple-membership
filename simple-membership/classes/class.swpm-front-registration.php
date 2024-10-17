@@ -76,11 +76,19 @@ class SwpmFrontRegistration extends SwpmRegistration {
 		if ( empty( $membership_level ) ) {
 			$joinuspage_link         = '<a href="' . $joinuspage_url . '">' . SwpmUtils::_( 'Join Us' ) . '</a>';
 			$free_rego_disabled_msg  = '<p>';
-			$free_rego_disabled_msg .= SwpmUtils::_( 'Free membership is disabled on this site. Please make a payment from the ' );
-			$free_rego_disabled_msg .= SwpmUtils::_( $joinuspage_link );
-			$free_rego_disabled_msg .= SwpmUtils::_( ' page to pay for a premium membership.' );
-			$free_rego_disabled_msg .= '</p><p>';
-			$free_rego_disabled_msg .= SwpmUtils::_( 'You will receive a unique link via email after the payment. You will be able to use that link to complete the premium membership registration.' );
+			$free_rego_disabled_msg .= __( 'Free membership is disabled on this site. ', 'simple-membership' );
+
+			//Check if the "Hide Join Us Link" feature is enabled. If it is enabled, don't show the link.
+			$hide_join_us_link_enabled = SwpmSettings::get_instance()->get_value('hide-join-us-link');
+			if (empty($hide_join_us_link_enabled)){
+				//Show the "Join Us" option.
+				$free_rego_disabled_msg .= __( 'Please make a payment from the ', 'simple-membership'  );
+				$free_rego_disabled_msg .= SwpmUtils::_( $joinuspage_link );
+				$free_rego_disabled_msg .= SwpmUtils::_( ' page to pay for a premium membership.' );
+				$free_rego_disabled_msg .= '</p><p>';
+				$free_rego_disabled_msg .= SwpmUtils::_( 'You will receive a unique link via email after the payment. You will be able to use that link to complete the premium membership registration.' );
+			}
+
 			$free_rego_disabled_msg .= '</p>';
 			return $free_rego_disabled_msg;
 		}
@@ -110,6 +118,11 @@ class SwpmFrontRegistration extends SwpmRegistration {
 	}
 
 	public function register_front_end() {
+		//Registration data update sequence:
+		//1. Save the data in the simple membership member table.
+		//2. Create a corresponding WP user account.
+		//3. Send the registration complete email.
+
 		//Trigger action hook
 		do_action( 'swpm_front_end_registration_form_submitted' );
 
@@ -173,8 +186,9 @@ class SwpmFrontRegistration extends SwpmRegistration {
 				do_action( 'swpm_front_end_registration_complete' ); //Keep this action hook for people who are using it (so their implementation doesn't break).
 				do_action( 'swpm_front_end_registration_complete_user_data', $this->member_info );
 
-				//Check if there is after registration redirect
+				//Check if there is after registration redirect (for non-email activation scenario).
 				if ( ! $this->email_activation ) {
+					//This is a non-email activation scenario.
 					$after_rego_url = SwpmSettings::get_instance()->get_value( 'after-rego-redirect-page-url' );
 					$after_rego_url = apply_filters( 'swpm_after_registration_redirect_url', $after_rego_url );
 					if ( ! empty( $after_rego_url ) ) {
@@ -187,10 +201,11 @@ class SwpmFrontRegistration extends SwpmRegistration {
 
 				//Set the registration complete message
 				if ( $this->email_activation ) {
+					//This is an email activation scenario.
 					$email_act_msg  = '<div class="swpm-registration-success-msg">';
 					$email_act_msg .= SwpmUtils::_( 'You need to confirm your email address. Please check your email and follow instructions to complete your registration.' );
 					$email_act_msg .= '</div>';
-									$email_act_msg = apply_filters( 'swpm_registration_email_activation_msg', $email_act_msg );//Can be added to the custom messages addon.
+					$email_act_msg = apply_filters( 'swpm_registration_email_activation_msg', $email_act_msg );//Can be added to the custom messages addon.
 					$message        = array(
 						'succeeded' => true,
 						'message'   => $email_act_msg,
@@ -219,6 +234,10 @@ class SwpmFrontRegistration extends SwpmRegistration {
 	 * It returns true if the user creation was successful. Otherwise, it returns false.
 	 */
 	private function create_swpm_user() {
+		/*
+		 * Create the $member_info array with the sanitized form data. Then save the data in the members table.
+		 */
+
 		global $wpdb;
 		$member = SwpmTransfer::$default_fields;
 		$form   = new SwpmFrontForm( $member );
@@ -238,19 +257,44 @@ class SwpmFrontRegistration extends SwpmRegistration {
         SwpmMemberUtils::check_and_die_if_email_belongs_to_admin_user($member_info['email']);
 
 		//Go ahead and create the SWPM user record.
-		$free_level                           = SwpmUtils::get_free_level();
-		$account_status                       = SwpmSettings::get_instance()->get_value( 'default-account-status', 'active' );
+		$free_level = SwpmUtils::get_free_level();
 		$member_info['last_accessed_from_ip'] = SwpmUtils::get_user_ip_address();
-		$member_info['member_since']          = SwpmUtils::get_current_date_in_wp_zone(); //date( 'Y-m-d' );
-		$member_info['subscription_starts']   = SwpmUtils::get_current_date_in_wp_zone(); //date( 'Y-m-d' );
-		$member_info['account_state']         = $account_status;
+		$member_info['member_since'] = SwpmUtils::get_current_date_in_wp_zone(); //date( 'Y-m-d' );
+		$member_info['subscription_starts'] = SwpmUtils::get_current_date_in_wp_zone(); //date( 'Y-m-d' );
+
+		$membership_level_id = filter_input( INPUT_POST, 'swpm_membership_level', FILTER_SANITIZE_NUMBER_INT );
+
+		/**
+		 * Determine the account status for the new member record.
+		 * First, check if email activation is required. If so, assign the 'activation_required' account status.
+		 * If not, check if a default account status is set per membership level.
+		 * If a membership level default is set, use that setting; otherwise, use the global settings.
+		 */
 		if ( $this->email_activation ) {
-			$member_info['account_state'] = 'activation_required';
+			//Email activation is enabled. Set the account status to 'activation_required'.
+			$account_status = 'activation_required';
+		} else {
+			//Check if a default account status is set per membership level.
+			$level_custom_fields = SwpmMembershipLevelCustom::get_instance_by_id($membership_level_id);
+
+			// Get per membership level default account status settings (if any).
+			$account_status = sanitize_text_field($level_custom_fields->get('default_account_status'));
+
+			if ( !isset( $account_status ) || empty( $account_status ) ){
+				//Fallback. Use the value from the global settings.
+				$account_status = SwpmSettings::get_instance()->get_value( 'default-account-status', 'active' );
+			}
 		}
+		$member_info['account_state'] = $account_status;
+		SwpmLog::log_simple_debug("Creating new swpm user. Account status: ". $account_status . ", Membership Level ID: ".$membership_level_id, true);
+
+		//Save the plain password in temporary variable for use in the later execution steps.
 		$plain_password = $member_info['plain_password'];
 		unset( $member_info['plain_password'] );
 
 		if ( SwpmUtils::is_paid_registration() ) {
+			/* Paid membership registration path (the member's record is originally created after the payment). */
+
 			//Remove any empty values from the array. This will preserve address information if it was received via the payment gateway.
 			$member_info = array_filter($member_info);
 
@@ -258,7 +302,11 @@ class SwpmFrontRegistration extends SwpmRegistration {
 			$member_info['reg_code'] = '';
 			$member_id = filter_input( INPUT_GET, 'member_id', FILTER_SANITIZE_NUMBER_INT );
 			$code = isset( $_GET['code'] ) ? sanitize_text_field( stripslashes ( $_GET['code'] ) ) : '';
-			//Update the member record in the database.
+
+			//Trigger the before member data save filter hook. It can be used to customize the member data before it gets saved in the database.
+			$member_info = apply_filters( 'swpm_registration_data_before_save', $member_info );
+
+			//Update the member's record in the database. 
 			$query_result = $wpdb->update(
 				$wpdb->prefix . 'swpm_members_tbl',/*table*/
 				$member_info,/*data*/
@@ -283,11 +331,18 @@ class SwpmFrontRegistration extends SwpmRegistration {
 			$member_info['membership_level'] = $wpdb->get_var( $query );
 			$last_insert_id = $member_id;
 		} elseif ( ! empty( $free_level ) ) {
+			/* Free account/membership registration path. */
+
 			$member_info['membership_level'] = $free_level;
-			//Create a new free member record in the database.
+
+			//Trigger the before member data save filter hook. It can be used to customize the member data before it gets saved in the database.
+			$member_info = apply_filters( 'swpm_registration_data_before_save', $member_info );
+
+			//Create a new member record in the database for the free account/member registration.
 			$wpdb->insert( $wpdb->prefix . 'swpm_members_tbl', $member_info );
 			$last_insert_id = $wpdb->insert_id;
 		} else {
+			/* Error condition. Show an error message and return false so the process stops here. */
 			$message = array(
 				'succeeded' => false,
 				'message'   => SwpmUtils::_( 'Membership Level Couldn\'t be found.' ),
@@ -296,6 +351,8 @@ class SwpmFrontRegistration extends SwpmRegistration {
 			return false;
 		}
 		$member_info['plain_password'] = $plain_password;
+
+		//Save the updated member info in the class property so it can be used in the later execution steps.
 		$this->member_info = $member_info;
 		return true;
 	}
@@ -342,44 +399,57 @@ class SwpmFrontRegistration extends SwpmRegistration {
 		//Check nonce
 		if ( ! isset( $_POST['swpm_profile_edit_nonce_val'] ) || ! wp_verify_nonce( $_POST['swpm_profile_edit_nonce_val'], 'swpm_profile_edit_nonce_action' ) ) {
 			//Nonce check failed.
-			wp_die( SwpmUtils::_( 'Error! Nonce verification failed for front end profile edit.' ) );
+			wp_die( __( 'Error! Nonce verification failed for front end profile edit.', 'simple-membership' ) );
 		}
                 
-                //Trigger action hook
-                do_action( 'swpm_front_end_edit_profile_form_submitted' );
+        //Trigger action hook
+        do_action( 'swpm_front_end_edit_profile_form_submitted' );
                 
 		$user_data = (array) $auth->userData;
 		unset( $user_data['permitted'] );
 		$form = new SwpmForm( $user_data );
 		if ( $form->is_valid() ) {
+			//Successful form submission. Proceed with the profile update.
+			
+			/********************************
+			//Profile update sequence:
+			1) Update the WP user entry with the new data.
+			2) Update the SWPM member entry with the new data.
+			3) Reload the user data so the profile page reflects the new data.
+			4) Reset the auth cookies (if the password was updated).
+			*********************************/
+
 			global $wpdb;
-			$msg_str = '<div class="swpm-profile-update-success">' . SwpmUtils::_( 'Profile updated successfully.' ) . '</div>';
+			$msg_str = '<div class="swpm-profile-update-success">' . __( 'Profile updated successfully.', 'simple-membership' ) . '</div>';
 			$message = array(
 				'succeeded' => true,
 				'message'   => $msg_str,
 			);
 
+			//Get the sanitized member form data.
 			$member_info = $form->get_sanitized_member_form_data();
 
-                        //Check if membrship_level value has been posted.
-                        if ( isset( $member_info['membership_level'] ) ){
-                            //For edit profile, remove the membership level from the array (because we don't allow level updating in profile edit)
-                            unset( $member_info['membership_level'] );
-                        }
+            //Check if membrship_level value has been posted.
+            if ( isset( $member_info['membership_level'] ) ){
+                //For edit profile, remove the membership level from the array (because we don't allow level updating in profile edit)
+                unset( $member_info['membership_level'] );
+            }
 
-			SwpmUtils::update_wp_user( $auth->get( 'user_name' ), $member_info ); //Update corresponding wp user record.
+			//Update the corresponding wp user record.
+			SwpmUtils::update_wp_user( $auth->get( 'user_name' ), $member_info ); 
 
 			//Lets check if password was also changed.
 			$password_also_changed = false;
 			if ( isset( $member_info['plain_password'] ) ) {
 				//Password was also changed.
-				$msg_str = '<div class="swpm-profile-update-success">' . SwpmUtils::_( 'Profile updated successfully. You will need to re-login since you changed your password.' ) . '</div>';
+				$msg_str = '<div class="swpm-profile-update-success">' . __( 'Profile updated successfully.', 'simple-membership') . '</div>';
 				$message = array(
 					'succeeded' => true,
 					'message'   => $msg_str,
 				);
+				//unset the plain password from the member info array so it doesn't try to save it in the database.
 				unset( $member_info['plain_password'] );
-				//Set the password chagned flag.
+				//Set the password changed flag.
 				$password_also_changed = true;
 			}
 
@@ -388,20 +458,42 @@ class SwpmFrontRegistration extends SwpmRegistration {
 			//SwpmLog::log_simple_debug("Updating member profile data with SWPM ID: " . $swpm_id, true);
 			$member_info = array_filter( $member_info );//Remove any null values.
 			$wpdb->update( $wpdb->prefix . 'swpm_members_tbl', $member_info, array( 'member_id' => $swpm_id ) );
-			$auth->reload_user_data();//Reload user data after update so the profile page reflects the new data.
 
+			//Reload user data after update so the profile page reflects the new data.
+			$auth->reload_user_data();
+
+			//Check if password was also changed.
 			if ( $password_also_changed ) {
-				//Password was also changed. Clear the user's auth cookies.
+				//Password was also changed. Clear and reset the user's auth cookies so they can stay logged in.
+				SwpmLog::log_simple_debug( 'Member has updated the password from the SWPM profile edit page. Member ID: ' . $swpm_id, true );
+
 				$auth_object = SwpmAuth::get_instance();
-				$auth_object->clear_wp_user_auth_cookies(); //Clear the wp user auth cookies and destroy session.
-				$auth_object->swpm_clear_auth_cookies(); //Clear the swpm auth cookies. The user will be forced to login on the next page load.
-				SwpmLog::log_simple_debug( 'Member has updated the password from profile edit page. Logging the user out so he can re-login using the new password.', true );
+				$swpm_user_name = $auth_object->get( 'user_name' );
+				$user_info_params = array(
+					'member_id' => $swpm_id,
+					'user_name' => $swpm_user_name,
+					'new_enc_password' => $member_info['password'],
+				);
+				$auth_object->reset_auth_cookies_after_pass_change($user_info_params);
+
+				//Trigger action hook
+				do_action( 'swpm_front_end_profile_password_changed', $member_info );
 			}
 
+			//This message will be persistent (for this user's session) until the message is displayed.
 			SwpmTransfer::get_instance()->set( 'status', $message );
 
+			//Trigger action hook
 			do_action( 'swpm_front_end_profile_edited', $member_info );
-			return true; //Successful form submission.
+
+			//Do a page refresh to reflect the new data.
+			//This is specially useful when the user changes their password which will invalidate the current auth cookies and the nonce values. 
+			//A page refresh will generate new nonce values (using the new auth cookies) and the user can submit the profile form again without any issues.		
+			$current_page_url = SwpmMiscUtils::get_current_page_url();
+			SwpmMiscUtils::redirect_to_url( $current_page_url );
+
+			//Success. Profile updated.
+			return true; 
 		} else {
 			$msg_str = '<div class="swpm-profile-update-error">' . SwpmUtils::_( 'Please correct the following.' ) . '</div>';
 			$message = array(
@@ -573,7 +665,12 @@ class SwpmFrontRegistration extends SwpmRegistration {
 		return false;
 	}
 
+	/*
+	 * This function is called when the user clicks on the activation link in the email.
+	 */
 	public function email_activation() {
+		//The email activation link contains the member ID and the activation code.
+
 		$login_page_url = SwpmSettings::get_instance()->get_value( 'login-page-url' );
 
 		// Allow hooks to change the value of login_page_url
@@ -607,33 +704,42 @@ class SwpmFrontRegistration extends SwpmRegistration {
 		}
 		$activation_account_status = apply_filters( 'swpm_activation_feature_override_account_status', 'active' );
 		SwpmMemberUtils::update_account_state( $member_id, $activation_account_status );
-		$this->member_info                   = (array) $member;
+		$this->member_info = (array) $member;
 		$this->member_info['plain_password'] = SwpmUtils::crypt( $act_data['plain_password'], 'd' );
 		$this->send_reg_email();
 
+		//Setup the success message.
 		$msg = '<div class="swpm_temporary_msg" style="font-weight: bold;">' . SwpmUtils::_( 'Success! Your account has been activated successfully.' ) . '</div>';
 
-		// retrieving registered membership level details by the user.
+		// Check and retrieve membership level specific after activation redirect URL data.
 		$membership_level = SwpmUtils::get_membership_level_row_by_id($member->membership_level);
-		$custom_fields = SwpmMembershipLevelCustom::get_instance_by_id($membership_level->id);
-		$after_activation_redirect_page = sanitize_url($custom_fields->get('after_activation_redirect_page'));
+		$level_custom_data = SwpmMembershipLevelCustom::get_instance_by_id($membership_level->id);
+		$after_activation_redirect_page = sanitize_url($level_custom_data->get('after_activation_redirect_page'));
 
 		// Check Whether the membership_level has a dedicated after activation redirect URL.
 		if (!empty($after_activation_redirect_page)){
-			$after_rego_url = $after_activation_redirect_page;
+			//There is a dedicated after activation redirect URL for this membership level.
+			SwpmLog::log_simple_debug( 'There is a dedicated after email activation redirect URL for this membership level. Setting this as the redirect URL: ' . $after_activation_redirect_page, true );
+			$after_email_activation_url = $after_activation_redirect_page;
 		}else{
-			$after_rego_url = SwpmSettings::get_instance()->get_value( 'after-rego-redirect-page-url' );
+			//No dedicated after activation redirect URL for this membership level.
+			//For backwards compatibility - Use the fallback to after registration redirect URL from the settings.
+			$after_email_activation_url = SwpmSettings::get_instance()->get_value( 'after-rego-redirect-page-url' );
 		}
 
-		$after_rego_url = apply_filters( 'swpm_after_registration_redirect_url', $after_rego_url );
-		if ( ! empty( $after_rego_url ) ) {
-			//Yes. Need to redirect to this after registration page
-			SwpmLog::log_simple_debug( 'After registration redirect is configured in settings. Redirecting user to: ' . $after_rego_url, true );
-			SwpmMiscUtils::show_temporary_message_then_redirect( $msg, $after_rego_url );
+		//Trigger hooks to allow other plugins to change the after activation redirect URL.
+		//Keeping this one for backwards compatibility for now.
+		$after_email_activation_url = apply_filters( 'swpm_after_registration_redirect_url', $after_email_activation_url );//TODO - remove later.
+		$after_email_activation_url = apply_filters( 'swpm_after_email_activation_redirect_url', $after_email_activation_url );
+
+		if ( ! empty( $after_email_activation_url ) ) {
+			//Yes. Need to redirect to this after registration confirmation page.
+			SwpmLog::log_simple_debug( 'After email activation redirect is configured. Redirecting the user to: ' . $after_email_activation_url, true );
+			SwpmMiscUtils::show_temporary_message_then_redirect( $msg, $after_email_activation_url );
 			exit( 0 );
 		}
 
-		//show success message and redirect to login page
+		//No redirection has been configured. show success message and redirect to the standard login page.
 		SwpmMiscUtils::show_temporary_message_then_redirect( $msg, $login_page_url );
 		exit( 0 );
 	}
@@ -666,9 +772,9 @@ class SwpmFrontRegistration extends SwpmRegistration {
 
 		delete_option( 'swpm_email_activation_data_usr_' . $member_id );
 
-		$this->member_info                   = (array) $member;
+		$this->member_info = (array) $member;
 		$this->member_info['plain_password'] = SwpmUtils::crypt( $act_data['plain_password'], 'd' );
-		$this->email_activation              = true;
+		$this->email_activation = true;
 		$this->send_reg_email();
 
 		$msg = '<div class="swpm_temporary_msg" style="font-weight: bold;">' . SwpmUtils::_( 'Activation email has been sent. Please check your email and activate your account.' ) . '</div>';

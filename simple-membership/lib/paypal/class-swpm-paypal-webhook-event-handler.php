@@ -111,6 +111,10 @@ class SWPM_PayPal_Webhook_Event_Handler {
 		}
 
 		if( $status == 'expired' || $status == 'cancelled' || $status == 'suspended'){
+
+            // Update subscription status of the subscription agreement record in transactions cpt table.
+            SWPM_Utils_Subscriptions::update_subscription_agreement_record_status_to_cancelled($subscription_id);
+
 			//Set the account profile to expired or inactive.
 
 			//Retrieve the member record for this subscription
@@ -124,18 +128,18 @@ class SWPM_PayPal_Webhook_Event_Handler {
 			// Found a member record
 			$member_id = $member_record->member_id;
 			//Example value: array('last_webhook_status' => 'expired' );
-			$extra_info = maybe_unserialize( $member_record->extra_info );
-			if( isset( $extra_info['last_webhook_status'] ) && $extra_info['last_webhook_status'] == $status ){
+
+			if( SwpmMemberUtils::get_subscription_data_extra_info($member_id, 'last_webhook_status') == $status ){
 				//Nothing to do. This webhook status has already been processed.
 				SwpmLog::log_simple_debug( 'This webhook status ('.$status.') has already been processed for this member (ID: '.$member_id.'). Nothing to do.', true );
 				return;
 			} else {
 				//Save the last webhook status.
-				$extra_info['last_webhook_status'] = $status;
-				SwpmMemberUtils::update_account_extra_info( $member_id, $extra_info );
+				SwpmMemberUtils::set_subscription_data_extra_info( $member_id, 'last_webhook_status', $status );
 
 				//Handle the account status update according to the membership level's expiry settings.
 				$ipn_data = array();
+				$ipn_data['subscr_id'] = $subscription_id;
 				$ipn_data['custom'] = 'swpm_id=' . $member_id;
 				swpm_handle_subsc_cancel_stand_alone( $ipn_data );
 				return;
@@ -288,10 +292,9 @@ class SWPM_PayPal_Webhook_Event_Handler {
 
 	public static function is_sale_completed_webhook_already_processed( $event ){
 		// Query the DB to check if we have already processed this transaction or not.
-		global $wpdb;
 		$txn_id = isset( $event['resource']['id'] ) ? $event['resource']['id'] : '';
 		$subscription_id = isset( $event['resource']['billing_agreement_id'] ) ? $event['resource']['billing_agreement_id'] : '';
-		$txn_row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}swpm_payments_tbl WHERE txn_id = %s and subscr_id = %s", $txn_id, $subscription_id ), OBJECT );
+		$txn_row = SwpmTransactions::get_transaction_row_by_txn_id_and_subscription_id($txn_id, $subscription_id);
 		if (!empty($txn_row)) {
 			// And if we have already processed it, do nothing and return true
 			SwpmLog::log_simple_debug( "This webhook event has already been processed (Txn ID: ".$txn_id.", Subscr ID: ".$subscription_id."). This looks to be a duplicate webhook notification. Nothing to do.", true );
@@ -334,13 +337,13 @@ class SWPM_PayPal_Webhook_Event_Handler {
 		}
 
 		if ( isset( $response->verification_status ) && $response->verification_status !== 'SUCCESS' ) {
-			SwpmLog::log_simple_debug( 'Error! Webhook verification failed! Verification status: ' . $response->verification_status, false );
+			SwpmLog::log_simple_debug( 'Error! Webhook verification failed! Environment mode: '. $mode . ', Verification status: ' . $response->verification_status, false );
 			return false;
 		}
 
 		//If we are here then something went wrong. Log the error and return false.
 		//We can check the SWPM_PayPal_Request_API->last_error to find additional details if needed.
-		SwpmLog::log_simple_debug( 'Error! Webhook verification failed!', false );
+		SwpmLog::log_simple_debug( 'Error! Webhook verification failed! Environment mode: '. $mode, false );
 		return false;
 	}
 }
